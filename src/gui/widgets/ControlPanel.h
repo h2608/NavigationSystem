@@ -40,6 +40,9 @@ signals:
     // Pathfinding signals (now includes routing criteria)
     void computePathRequested(uint32_t startId, uint32_t endId, RoutingCriteria criteria);
 
+    // Traffic view signals
+    void showTrafficNearRequested(double x, double y, double radius);
+
     // Clear signals
     void clearHighlightsRequested();
 
@@ -47,10 +50,12 @@ public slots:
     // Update result display
     void showSpatialQueryResult(int nodeCount, int edgeCount);
     void showPathResult(int nodeCount, double totalCost, bool found);
+    void showTrafficResult(int edgeCount);
 
 private slots:
     void onFindNearestClicked();
     void onComputePathClicked();
+    void onShowTrafficClicked();
     void onClearClicked();
 
 private:
@@ -69,6 +74,13 @@ private:
     QComboBox* routingCriteriaCombo_;
     QPushButton* computePathButton_;
     QLabel* pathResultLabel_;
+
+    // Traffic view section
+    QDoubleSpinBox* trafficXSpinBox_;
+    QDoubleSpinBox* trafficYSpinBox_;
+    QDoubleSpinBox* trafficRadiusSpinBox_;
+    QPushButton* showTrafficButton_;
+    QLabel* trafficResultLabel_;
 
     // Clear button
     QPushButton* clearButton_;

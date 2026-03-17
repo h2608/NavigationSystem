@@ -30,12 +30,12 @@ double TrafficModel::getCongestionRatio(double capacity, double currentCount) {
 int TrafficModel::getCongestionStatus(double capacity, double currentCount) {
     double ratio = getCongestionRatio(capacity, currentCount);
 
-    if (ratio <= 0.5) {
-        return 0;  // Green - free flow
-    } else if (ratio <= 1.0) {
-        return 1;  // Yellow - moderate traffic
+    if (ratio <= K) {
+        return 0;  // Green - free flow (matches formula: f(x) = 1)
+    } else if (ratio <= K * 1.5) {
+        return 1;  // Yellow - moderate congestion
     } else {
-        return 2;  // Red - congested
+        return 2;  // Red - heavy congestion
     }
 }
 

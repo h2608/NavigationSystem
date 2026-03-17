@@ -22,11 +22,9 @@ PathResult DijkstraPathFinder::findPath(const Graph& graph, Node::Id start, Node
         return result;
     }
 
-    // Distance map (initialize to infinity)
+    // Distance map (lazy initialization - no need to set all to infinity)
     std::unordered_map<Node::Id, double> dist;
-    for (const auto& nodePair : graph.getNodes()) {
-        dist[nodePair.first] = std::numeric_limits<double>::infinity();
-    }
+    dist.reserve(graph.getNodeCount());
     dist[start] = 0.0;
 
     // Predecessor map: stores which edge led to this node
@@ -74,8 +72,10 @@ PathResult DijkstraPathFinder::findPath(const Graph& graph, Node::Id start, Node
             // Calculate new distance
             double newDist = dist[currentNode] + edge->getLength();
 
-            // If this is a better path, update
-            if (newDist < dist[neighbor]) {
+            // If this is a better path, update (missing entry = infinity)
+            auto it = dist.find(neighbor);
+            double currentBest = (it != dist.end()) ? it->second : std::numeric_limits<double>::infinity();
+            if (newDist < currentBest) {
                 dist[neighbor] = newDist;
                 predecessor[neighbor] = edgeId;
                 pq.push({newDist, neighbor});
@@ -84,14 +84,15 @@ PathResult DijkstraPathFinder::findPath(const Graph& graph, Node::Id start, Node
     }
 
     // Check if path was found
-    if (dist[end] == std::numeric_limits<double>::infinity()) {
+    auto endIt = dist.find(end);
+    if (endIt == dist.end() || endIt->second == std::numeric_limits<double>::infinity()) {
         result.found = false;
         return result;
     }
 
     // Reconstruct path
     result.found = true;
-    result.totalCost = dist[end];
+    result.totalCost = endIt->second;
     reconstructPath(graph, start, end, predecessor, result);
 
     return result;

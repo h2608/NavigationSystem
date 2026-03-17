@@ -89,6 +89,45 @@ void ControlPanel::setupUi() {
 
     mainLayout->addWidget(pathGroup);
 
+    // ========== Section 3: Traffic View (F4) ==========
+    QGroupBox* trafficGroup = new QGroupBox("Traffic View (F4)", mainWidget);
+    QVBoxLayout* trafficLayout = new QVBoxLayout(trafficGroup);
+
+    QFormLayout* trafficForm = new QFormLayout();
+
+    trafficXSpinBox_ = new QDoubleSpinBox();
+    trafficXSpinBox_->setRange(0.0, 10000.0);
+    trafficXSpinBox_->setValue(5000.0);
+    trafficXSpinBox_->setDecimals(2);
+    trafficXSpinBox_->setSingleStep(100.0);
+    trafficForm->addRow("X Coordinate:", trafficXSpinBox_);
+
+    trafficYSpinBox_ = new QDoubleSpinBox();
+    trafficYSpinBox_->setRange(0.0, 10000.0);
+    trafficYSpinBox_->setValue(5000.0);
+    trafficYSpinBox_->setDecimals(2);
+    trafficYSpinBox_->setSingleStep(100.0);
+    trafficForm->addRow("Y Coordinate:", trafficYSpinBox_);
+
+    trafficRadiusSpinBox_ = new QDoubleSpinBox();
+    trafficRadiusSpinBox_->setRange(100.0, 5000.0);
+    trafficRadiusSpinBox_->setValue(500.0);
+    trafficRadiusSpinBox_->setDecimals(0);
+    trafficRadiusSpinBox_->setSingleStep(100.0);
+    trafficForm->addRow("View Radius:", trafficRadiusSpinBox_);
+
+    trafficLayout->addLayout(trafficForm);
+
+    showTrafficButton_ = new QPushButton("Show Traffic Near Point");
+    trafficLayout->addWidget(showTrafficButton_);
+
+    trafficResultLabel_ = new QLabel("Result: -");
+    trafficResultLabel_->setWordWrap(true);
+    trafficResultLabel_->setStyleSheet("QLabel { background-color: #f0f0f0; padding: 5px; border-radius: 3px; }");
+    trafficLayout->addWidget(trafficResultLabel_);
+
+    mainLayout->addWidget(trafficGroup);
+
     // ========== Clear Button ==========
     clearButton_ = new QPushButton("Clear All Highlights");
     clearButton_->setStyleSheet("QPushButton { background-color: #ffcccc; }");
@@ -105,6 +144,7 @@ void ControlPanel::setupUi() {
     // Connect signals
     connect(findNearestButton_, &QPushButton::clicked, this, &ControlPanel::onFindNearestClicked);
     connect(computePathButton_, &QPushButton::clicked, this, &ControlPanel::onComputePathClicked);
+    connect(showTrafficButton_, &QPushButton::clicked, this, &ControlPanel::onShowTrafficClicked);
     connect(clearButton_, &QPushButton::clicked, this, &ControlPanel::onClearClicked);
 }
 
@@ -119,6 +159,11 @@ void ControlPanel::setCoordinateRange(double minX, double maxX, double minY, dou
     yCoordSpinBox_->setRange(minY, maxY);
     xCoordSpinBox_->setValue((minX + maxX) / 2.0);
     yCoordSpinBox_->setValue((minY + maxY) / 2.0);
+
+    trafficXSpinBox_->setRange(minX, maxX);
+    trafficYSpinBox_->setRange(minY, maxY);
+    trafficXSpinBox_->setValue((minX + maxX) / 2.0);
+    trafficYSpinBox_->setValue((minY + maxY) / 2.0);
 }
 
 void ControlPanel::onFindNearestClicked() {
@@ -147,7 +192,17 @@ RoutingCriteria ControlPanel::getRoutingCriteria() const {
 void ControlPanel::onClearClicked() {
     spatialResultLabel_->setText("Result: -");
     pathResultLabel_->setText("Result: -");
+    trafficResultLabel_->setText("Result: -");
     emit clearHighlightsRequested();
+}
+
+void ControlPanel::onShowTrafficClicked() {
+    double x = trafficXSpinBox_->value();
+    double y = trafficYSpinBox_->value();
+    double radius = trafficRadiusSpinBox_->value();
+
+    trafficResultLabel_->setText("Loading...");
+    emit showTrafficNearRequested(x, y, radius);
 }
 
 void ControlPanel::showSpatialQueryResult(int nodeCount, int edgeCount) {
@@ -164,6 +219,10 @@ void ControlPanel::showPathResult(int nodeCount, double totalCost, bool found) {
     } else {
         pathResultLabel_->setText("No path found!");
     }
+}
+
+void ControlPanel::showTrafficResult(int edgeCount) {
+    trafficResultLabel_->setText(QString("Showing %1 roads\nColors update dynamically").arg(edgeCount));
 }
 
 } // namespace nav

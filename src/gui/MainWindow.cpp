@@ -3,6 +3,7 @@
 #include "gui/view/MapScene.h"
 #include "gui/widgets/ControlPanel.h"
 #include "gui/widgets/GenerateMapDialog.h"
+#include "core/spatial/BoundingBox.h"
 #include <QMenuBar>
 #include <QToolBar>
 #include <QAction>
@@ -119,6 +120,8 @@ void MainWindow::setupControlPanel() {
             this, &MainWindow::onFindNearestRequested);
     connect(controlPanel_, &ControlPanel::computePathRequested,
             this, &MainWindow::onComputePathRequested);
+    connect(controlPanel_, &ControlPanel::showTrafficNearRequested,
+            this, &MainWindow::onShowTrafficNearRequested);
     connect(controlPanel_, &ControlPanel::clearHighlightsRequested,
             this, &MainWindow::onClearHighlightsRequested);
 }
@@ -157,19 +160,22 @@ void MainWindow::generateNewMap(int numNodes, double width, double height) {
     std::cout << "Generated map: " << graph_->getNodeCount() << " nodes, "
               << graph_->getEdgeCount() << " edges" << std::endl;
 
-    // Create new simulator for the new graph
-    simulator_ = std::make_unique<TrafficSimulator>(*graph_);
+    // Create new simulator for the new graph (uses Dijkstra for route computation)
+    simulator_ = std::make_unique<TrafficSimulator>(*graph_, dijkstraPathfinder_.get());
+
+    // Set simulation running BEFORE loadGraph so updatePathfinder() picks DynamicPathFinder
+    simulationRunning_ = true;
 
     // Load into scene
     loadGraph(*graph_);
 
     // Start traffic simulation in background (always running)
-    simulationRunning_ = true;
     simulationTimer_->start(100);  // 100ms interval
     std::cout << "Traffic simulation started (background)" << std::endl;
 
     // Reset heatmap visibility to off by default
     heatmapVisible_ = false;
+    mapScene_->setHeatmapVisible(false);
     simulationAction_->setChecked(false);
 }
 
@@ -213,6 +219,7 @@ void MainWindow::onZoomToFit() {
 void MainWindow::onToggleSimulation() {
     // Toggle heatmap visibility (simulation always runs in background)
     heatmapVisible_ = !heatmapVisible_;
+    mapScene_->setHeatmapVisible(heatmapVisible_);
 
     if (heatmapVisible_) {
         simulationAction_->setText("&Hide Traffic Heatmap");
@@ -264,6 +271,11 @@ void MainWindow::onSimulationStep() {
                 }
             }
         }
+
+        // Update localized traffic view if active
+        if (!mapScene_->getTrafficHighlightedEdges().empty()) {
+            mapScene_->updateTrafficHighlights(*graph_);
+        }
     }
 }
 
@@ -297,16 +309,23 @@ void MainWindow::onFindNearestRequested(double x, double y, int k) {
     // Highlight the found nodes (Cyan color)
     mapScene_->highlightNodes(nearestNodes, QColor(0, 188, 212));  // Cyan
 
-    // Count connected edges
-    std::unordered_set<Edge::Id> connectedEdges;
+    // Collect all edges associated with the found nodes
+    std::unordered_set<Edge::Id> associatedEdgeSet;
     for (Node::Id nodeId : nearestNodes) {
         const auto& edges = graph_->getAdjacentEdges(nodeId);
         for (Edge::Id edgeId : edges) {
-            connectedEdges.insert(edgeId);
+            const Edge* edge = graph_->getEdge(edgeId);
+            if (edge) {
+                associatedEdgeSet.insert(edgeId);
+            }
         }
     }
 
-    int edgeCount = static_cast<int>(connectedEdges.size());
+    // Highlight associated edges
+    std::vector<Edge::Id> associatedEdges(associatedEdgeSet.begin(), associatedEdgeSet.end());
+    mapScene_->highlightEdges(associatedEdges, QColor(0, 188, 212));  // Cyan
+
+    int edgeCount = static_cast<int>(associatedEdges.size());
 
     std::cout << "Found " << nearestNodes.size() << " nodes with " << edgeCount << " connected edges" << std::endl;
 
@@ -373,8 +392,56 @@ void MainWindow::onComputePathRequested(uint32_t startId, uint32_t endId, Routin
                                    result.totalCost, result.found);
 }
 
+void MainWindow::onShowTrafficNearRequested(double x, double y, double radius) {
+    if (!quadTree_ || !graph_) {
+        controlPanel_->showTrafficResult(0);
+        statusBar()->showMessage("QuadTree not initialized!");
+        return;
+    }
+
+    std::cout << "Showing traffic near (" << x << ", " << y << ") radius " << radius << std::endl;
+
+    // Clear previous traffic highlights
+    mapScene_->clearTrafficHighlights();
+
+    // Find all nodes within radius using QuadTree range query
+    BoundingBox queryBox(x - radius, y - radius, x + radius, y + radius);
+    std::vector<Node::Id> nearbyNodes = quadTree_->queryRange(queryBox);
+
+    // Collect all edges adjacent to nearby nodes (roads near the coordinate)
+    std::unordered_set<Edge::Id> nearbyEdgeSet;
+    for (Node::Id nodeId : nearbyNodes) {
+        const auto& edges = graph_->getAdjacentEdges(nodeId);
+        for (Edge::Id edgeId : edges) {
+            const Edge* edge = graph_->getEdge(edgeId);
+            if (edge) {
+                nearbyEdgeSet.insert(edgeId);
+            }
+        }
+    }
+
+    std::vector<Edge::Id> nearbyEdges(nearbyEdgeSet.begin(), nearbyEdgeSet.end());
+
+    // Show traffic colors on those edges
+    mapScene_->showTrafficEdges(nearbyEdges, *graph_);
+
+    // Show query point marker
+    mapScene_->showQueryPoint(x, y);
+
+    // Auto-focus on the area
+    QRectF viewBounds(x - radius, y - radius, radius * 2, radius * 2);
+    mapView_->focusOnBounds(viewBounds, 50.0);
+
+    controlPanel_->showTrafficResult(static_cast<int>(nearbyEdges.size()));
+    statusBar()->showMessage(QString("Traffic View: Showing %1 roads near (%2, %3)")
+                                 .arg(nearbyEdges.size())
+                                 .arg(x, 0, 'f', 0)
+                                 .arg(y, 0, 'f', 0));
+}
+
 void MainWindow::onClearHighlightsRequested() {
     mapScene_->clearSpatialHighlights();
+    mapScene_->clearTrafficHighlights();
     mapScene_->clearPathSelection();
     statusBar()->showMessage("All highlights cleared.");
 }

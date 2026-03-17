@@ -5,6 +5,7 @@
 #include "core/graph/Node.h"
 #include <vector>
 #include <memory>
+#include <queue>
 
 namespace nav {
 
@@ -54,9 +55,9 @@ private:
     // Subdivide this node into 4 children
     void subdivide();
 
-    // Helper for k-nearest search
+    // Helper for k-nearest search using max-heap
     void findKNearestHelper(const Point2D& query, size_t k,
-                           std::vector<DistanceEntry>& candidates) const;
+                           std::priority_queue<DistanceEntry>& maxHeap) const;
 
     // Helper for range query
     void queryRangeHelper(const BoundingBox& range, std::vector<Node::Id>& result) const;

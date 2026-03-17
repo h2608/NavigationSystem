@@ -1,6 +1,7 @@
 #include "gui/view/MapScene.h"
 #include "gui/items/NodeItem.h"
 #include "gui/items/EdgeItem.h"
+#include "core/traffic/TrafficModel.h"
 #include <QGraphicsSceneMouseEvent>
 #include <QPainterPath>
 #include <QPen>
@@ -248,6 +249,22 @@ void MapScene::highlightNodes(const std::vector<Node::Id>& nodeIds, const QColor
     }
 }
 
+void MapScene::highlightEdges(const std::vector<Edge::Id>& edgeIds, const QColor& color) {
+    highlightedEdges_ = edgeIds;
+
+    QPen pen(color);
+    pen.setWidthF(3.0);
+    pen.setCapStyle(Qt::RoundCap);
+
+    for (Edge::Id id : edgeIds) {
+        EdgeItem* item = getEdgeItem(id);
+        if (item) {
+            item->setPen(pen);
+            item->setZValue(2.0);  // Above normal edges
+        }
+    }
+}
+
 void MapScene::clearSpatialHighlights() {
     // Reset previously highlighted nodes to default
     for (Node::Id id : highlightedNodes_) {
@@ -260,6 +277,25 @@ void MapScene::clearSpatialHighlights() {
         }
     }
     highlightedNodes_.clear();
+
+    // Restore previously highlighted edges to correct state
+    for (Edge::Id id : highlightedEdges_) {
+        EdgeItem* item = getEdgeItem(id);
+        if (item) {
+            int status = 0;  // Default green when heatmap is off
+            if (heatmapVisible_ && graph_) {
+                const Edge* edge = graph_->getEdge(id);
+                if (edge) {
+                    status = TrafficModel::getCongestionStatus(
+                        edge->getCapacity(),
+                        static_cast<double>(edge->getCarCount()));
+                }
+            }
+            item->updateStyle(status);
+            item->setZValue(0.0);
+        }
+    }
+    highlightedEdges_.clear();
 
     // Remove query point marker
     if (queryPointMarker_) {
@@ -321,6 +357,65 @@ void MapScene::showQueryPoint(double x, double y) {
     queryPointMarker_->setZValue(15.0);  // On top of everything
 
     addItem(queryPointMarker_);
+}
+
+void MapScene::showTrafficEdges(const std::vector<Edge::Id>& edgeIds, const Graph& graph) {
+    clearTrafficHighlights();
+    trafficHighlightedEdges_ = edgeIds;
+
+    for (Edge::Id id : edgeIds) {
+        EdgeItem* item = getEdgeItem(id);
+        const Edge* edge = graph.getEdge(id);
+        if (item && edge) {
+            int status = TrafficModel::getCongestionStatus(
+                edge->getCapacity(),
+                static_cast<double>(edge->getCarCount())
+            );
+            item->updateStyle(status);
+            item->setZValue(2.0);  // Above normal edges
+        }
+    }
+}
+
+void MapScene::clearTrafficHighlights() {
+    // Restore edges to correct state based on heatmap visibility
+    for (Edge::Id id : trafficHighlightedEdges_) {
+        EdgeItem* item = getEdgeItem(id);
+        if (item) {
+            int status = 0;  // Default green when heatmap is off
+            if (heatmapVisible_ && graph_) {
+                const Edge* edge = graph_->getEdge(id);
+                if (edge) {
+                    status = TrafficModel::getCongestionStatus(
+                        edge->getCapacity(),
+                        static_cast<double>(edge->getCarCount()));
+                }
+            }
+            item->updateStyle(status);
+            item->setZValue(0.0);
+        }
+    }
+    trafficHighlightedEdges_.clear();
+
+    if (trafficPointMarker_) {
+        removeItem(trafficPointMarker_);
+        delete trafficPointMarker_;
+        trafficPointMarker_ = nullptr;
+    }
+}
+
+void MapScene::updateTrafficHighlights(const Graph& graph) {
+    for (Edge::Id id : trafficHighlightedEdges_) {
+        EdgeItem* item = getEdgeItem(id);
+        const Edge* edge = graph.getEdge(id);
+        if (item && edge) {
+            int status = TrafficModel::getCongestionStatus(
+                edge->getCapacity(),
+                static_cast<double>(edge->getCarCount())
+            );
+            item->updateStyle(status);
+        }
+    }
 }
 
 } // namespace nav

@@ -50,11 +50,10 @@ void MapView::updateLOD() {
     // Show/hide nodes based on zoom level
     bool showNodes = (scale >= LOD_THRESHOLD);
 
-    // Iterate through all items and update NodeItem visibility
-    for (QGraphicsItem* item : scene()->items()) {
-        NodeItem* nodeItem = dynamic_cast<NodeItem*>(item);
-        if (nodeItem) {
-            nodeItem->setVisible(showNodes);
+    // Use the pre-built node map instead of iterating all scene items
+    for (const auto& pair : mapScene->getNodeItems()) {
+        if (pair.second) {
+            pair.second->setVisible(showNodes);
         }
     }
 }

@@ -41,6 +41,7 @@ private slots:
     // Control panel slots
     void onFindNearestRequested(double x, double y, int k);
     void onComputePathRequested(uint32_t startId, uint32_t endId, RoutingCriteria criteria);
+    void onShowTrafficNearRequested(double x, double y, double radius);
     void onClearHighlightsRequested();
 
 private:

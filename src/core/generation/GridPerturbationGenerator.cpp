@@ -60,15 +60,15 @@ struct TempEdge {
 GridPerturbationGenerator::GridPerturbationGenerator()
     : rng_(std::random_device{}())
     , perturbationFactor_(0.4)
-    , addDiagonals_(false)
-    , diagonalProbability_(0.3)
+    , addDiagonals_(true)
+    , diagonalProbability_(0.5)
 {}
 
 GridPerturbationGenerator::GridPerturbationGenerator(unsigned int seed)
     : rng_(seed)
     , perturbationFactor_(0.4)
-    , addDiagonals_(false)
-    , diagonalProbability_(0.3)
+    , addDiagonals_(true)
+    , diagonalProbability_(0.5)
 {}
 
 void GridPerturbationGenerator::generate(Graph& graph, int numNodes, double width, double height) {
@@ -133,10 +133,11 @@ void GridPerturbationGenerator::generate(Graph& graph, int numNodes, double widt
     std::cout << "Created " << nodesCreated << " nodes" << std::endl;
 
     // ========================================================================
-    // Step 1: Collect all potential edges (full grid connectivity)
+    // Step 1: Collect all potential edges (grid connectivity + diagonals)
     // ========================================================================
     std::vector<TempEdge> allEdges;
     std::uniform_real_distribution<double> weightDist(0.0, 1.0);
+    std::uniform_real_distribution<double> diagChance(0.0, 1.0);
 
     for (int i = 0; i < rows; ++i) {
         for (int j = 0; j < cols; ++j) {
@@ -154,7 +155,23 @@ void GridPerturbationGenerator::generate(Graph& graph, int numNodes, double widt
             if (i + 1 < rows && nodeGrid[i + 1][j] != Node::INVALID_ID) {
                 allEdges.push_back({currentNode, nodeGrid[i + 1][j], weightDist(rng_)});
             }
-            // NOTE: No diagonal edges - ensures strict planarity (no X-crossings)
+
+            // Diagonal edges (checkerboard pattern prevents X-crossings)
+            if (addDiagonals_ && (i + j) % 2 == 0) {
+                // Bottom-right diagonal
+                if (i + 1 < rows && j + 1 < cols && nodeGrid[i + 1][j + 1] != Node::INVALID_ID) {
+                    if (diagChance(rng_) < diagonalProbability_) {
+                        allEdges.push_back({currentNode, nodeGrid[i + 1][j + 1], weightDist(rng_)});
+                    }
+                }
+
+                // Bottom-left diagonal
+                if (i + 1 < rows && j - 1 >= 0 && nodeGrid[i + 1][j - 1] != Node::INVALID_ID) {
+                    if (diagChance(rng_) < diagonalProbability_) {
+                        allEdges.push_back({currentNode, nodeGrid[i + 1][j - 1], weightDist(rng_)});
+                    }
+                }
+            }
         }
     }
 
@@ -185,7 +202,7 @@ void GridPerturbationGenerator::generate(Graph& graph, int numNodes, double widt
     // ========================================================================
     // Step 3: Keep MST + 40% of non-MST edges (remove 60%)
     // ========================================================================
-    const double keepRatio = 0.7;  // Keep 70% of non-MST edges for more cycles
+    const double keepRatio = 0.6;  // Keep 60% of non-MST edges for reasonable density
     size_t nonMstToKeep = static_cast<size_t>(nonMstEdges.size() * keepRatio);
 
     // Shuffle non-MST edges and keep only a portion
@@ -193,19 +210,32 @@ void GridPerturbationGenerator::generate(Graph& graph, int numNodes, double widt
     nonMstEdges.resize(nonMstToKeep);
 
     // ========================================================================
-    // Step 4: Add final edges to graph
+    // Step 4: Add final edges to graph with variable capacity
     // ========================================================================
     int edgesCreated = 0;
+    double avgCellDim = (cellWidth + cellHeight) / 2.0;
+    std::uniform_real_distribution<double> capacityNoise(-2.0, 2.0);
+
+    auto setEdgeCapacity = [&](Edge::Id edgeId) {
+        Edge* e = graph.getEdge(edgeId);
+        if (e) {
+            double lengthRatio = e->getLength() / avgCellDim;
+            double capacity = 5.0 + 10.0 * lengthRatio + capacityNoise(rng_);
+            e->setCapacity(std::max(3.0, capacity));
+        }
+    };
 
     // Add all MST edges (guarantees connectivity)
     for (const auto& edge : mstEdges) {
-        graph.addEdge(edge.source, edge.target);
+        Edge::Id eid = graph.addEdge(edge.source, edge.target);
+        setEdgeCapacity(eid);
         edgesCreated++;
     }
 
     // Add kept non-MST edges (provides alternative paths)
     for (const auto& edge : nonMstEdges) {
-        graph.addEdge(edge.source, edge.target);
+        Edge::Id eid = graph.addEdge(edge.source, edge.target);
+        setEdgeCapacity(eid);
         edgesCreated++;
     }
 

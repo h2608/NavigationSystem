@@ -55,32 +55,32 @@ void QuadTree::subdivide() {
 }
 
 std::vector<Node::Id> QuadTree::findKNearest(const Point2D& query, size_t k) const {
-    std::vector<DistanceEntry> candidates;
-    findKNearestHelper(query, k, candidates);
+    // Max-heap of size k: top element is the farthest of the k nearest
+    std::priority_queue<DistanceEntry> maxHeap;
+    findKNearestHelper(query, k, maxHeap);
 
-    // Sort by distance (ascending)
-    std::sort(candidates.begin(), candidates.end(),
-              [](const DistanceEntry& a, const DistanceEntry& b) {
-                  return a.distance < b.distance;
-              });
-
-    // Extract the k nearest IDs
+    // Extract results from heap (farthest first, then reverse)
     std::vector<Node::Id> result;
-    size_t count = std::min(k, candidates.size());
-    result.reserve(count);
-    for (size_t i = 0; i < count; ++i) {
-        result.push_back(candidates[i].id);
+    result.reserve(maxHeap.size());
+    while (!maxHeap.empty()) {
+        result.push_back(maxHeap.top().id);
+        maxHeap.pop();
     }
-
+    std::reverse(result.begin(), result.end());  // Nearest first
     return result;
 }
 
 void QuadTree::findKNearestHelper(const Point2D& query, size_t k,
-                                  std::vector<DistanceEntry>& candidates) const {
-    // Add all entries in this node
+                                  std::priority_queue<DistanceEntry>& maxHeap) const {
+    // Process entries in this node
     for (const auto& entry : entries_) {
         double dist = query.distanceTo(entry.position);
-        candidates.emplace_back(entry.id, dist);
+        if (maxHeap.size() < k) {
+            maxHeap.push(DistanceEntry(entry.id, dist));
+        } else if (dist < maxHeap.top().distance) {
+            maxHeap.pop();
+            maxHeap.push(DistanceEntry(entry.id, dist));
+        }
     }
 
     // If not divided, we're done
@@ -128,28 +128,17 @@ void QuadTree::findKNearestHelper(const Point2D& query, size_t k,
     addChild(southWest_.get());
     addChild(southEast_.get());
 
-    // Visit children in order of distance to their bounding boxes
+    // Visit children in order of distance, pruning with max-heap
     while (!childQueue.empty()) {
         auto childDist = childQueue.top();
         childQueue.pop();
 
-        // Prune if we have k candidates and this child is farther than the k-th candidate
-        if (candidates.size() >= k) {
-            // Find the k-th smallest distance
-            std::vector<double> distances;
-            distances.reserve(candidates.size());
-            for (const auto& c : candidates) {
-                distances.push_back(c.distance);
-            }
-            std::nth_element(distances.begin(), distances.begin() + k - 1, distances.end());
-            double kthDistance = distances[k - 1];
-
-            if (childDist.distance > kthDistance) {
-                continue; // Prune this subtree
-            }
+        // Prune: if heap is full and child is farther than the worst candidate
+        if (maxHeap.size() >= k && childDist.distance > maxHeap.top().distance) {
+            continue;
         }
 
-        childDist.child->findKNearestHelper(query, k, candidates);
+        childDist.child->findKNearestHelper(query, k, maxHeap);
     }
 }
 

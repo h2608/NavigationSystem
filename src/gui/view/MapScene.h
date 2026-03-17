@@ -42,6 +42,10 @@ public:
     // Set the pathfinder to use
     void setPathFinder(PathFinder* pathfinder) { pathfinder_ = pathfinder; }
 
+    // Heatmap visibility (kept in sync by MainWindow)
+    void setHeatmapVisible(bool visible) { heatmapVisible_ = visible; }
+    bool isHeatmapVisible() const { return heatmapVisible_; }
+
     // Clear current path selection
     void clearPathSelection();
 
@@ -51,6 +55,9 @@ public:
     // Highlight a list of nodes (for spatial query results)
     void highlightNodes(const std::vector<Node::Id>& nodeIds, const QColor& color);
 
+    // Highlight a list of edges (for spatial query results)
+    void highlightEdges(const std::vector<Edge::Id>& edgeIds, const QColor& color);
+
     // Clear spatial query highlights
     void clearSpatialHighlights();
 
@@ -59,6 +66,12 @@ public:
 
     // Show query point marker
     void showQueryPoint(double x, double y);
+
+    // Traffic visualization for localized view (F4)
+    void showTrafficEdges(const std::vector<Edge::Id>& edgeIds, const Graph& graph);
+    void clearTrafficHighlights();
+    void updateTrafficHighlights(const Graph& graph);
+    const std::vector<Edge::Id>& getTrafficHighlightedEdges() const { return trafficHighlightedEdges_; }
 
 signals:
     void pathFound(const PathResult& result);
@@ -78,6 +91,7 @@ private:
     // Pathfinding state
     Graph* graph_ = nullptr;
     PathFinder* pathfinder_ = nullptr;
+    bool heatmapVisible_ = false;
     Node::Id startNode_ = Node::INVALID_ID;
     Node::Id endNode_ = Node::INVALID_ID;
     int clickState_ = 0;  // 0: waiting for start, 1: waiting for end, 2: path shown
@@ -89,7 +103,12 @@ private:
 
     // Spatial query visualization
     std::vector<Node::Id> highlightedNodes_;
+    std::vector<Edge::Id> highlightedEdges_;
     QGraphicsEllipseItem* queryPointMarker_ = nullptr;
+
+    // Traffic localized view (F4)
+    std::vector<Edge::Id> trafficHighlightedEdges_;
+    QGraphicsEllipseItem* trafficPointMarker_ = nullptr;
 };
 
 } // namespace nav
