@@ -5,6 +5,7 @@
 #include <QGraphicsPathItem>
 #include <QGraphicsEllipseItem>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include "core/graph/Graph.h"
 #include "core/graph/Node.h"
@@ -85,6 +86,8 @@ private:
     void highlightNode(Node::Id id, const QColor& color);
     void showPath(const PathResult& result);
     void clearPath();
+    void placeMarker(QGraphicsEllipseItem*& marker, double x, double y,
+                     const QColor& fill, const QColor& border);
 
     std::unordered_map<Node::Id, NodeItem*> nodeItems_;
     std::unordered_map<Edge::Id, EdgeItem*> edgeItems_;
@@ -104,7 +107,7 @@ private:
 
     // Spatial query visualization
     std::vector<Node::Id> highlightedNodes_;
-    std::vector<Edge::Id> highlightedEdges_;
+    std::unordered_set<Edge::Id> highlightedEdges_;
     QGraphicsEllipseItem* queryPointMarker_ = nullptr;
 
     // Traffic localized view (F4)

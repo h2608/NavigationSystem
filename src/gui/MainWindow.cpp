@@ -166,9 +166,16 @@ void MainWindow::generateNewMap(int numNodes, double width, double height) {
 
     // Scale the default traffic load to the generated graph size so the heatmap
     // can surface non-green states on the default 10k-node map.
+    static constexpr int kEdgesPerSpawn = 500;
+    static constexpr int kMinSpawnRate  = 20;
+    static constexpr int kMaxSpawnRate  = 40;
+    static constexpr int kEdgeToCarDiv  = 4;
+    static constexpr int kMinMaxCars    = 3000;
+    static constexpr int kMaxMaxCars    = 5000;
+
     const int edgeCount = static_cast<int>(graph_->getEdgeCount());
-    simulator_->setSpawnRate(std::clamp(edgeCount / 500, 20, 40));
-    simulator_->setMaxCars(std::clamp(edgeCount / 4, 3000, 5000));
+    simulator_->setSpawnRate(std::clamp(edgeCount / kEdgesPerSpawn, kMinSpawnRate, kMaxSpawnRate));
+    simulator_->setMaxCars(std::clamp(edgeCount / kEdgeToCarDiv, kMinMaxCars, kMaxMaxCars));
 
     // Set simulation running BEFORE loadGraph so updatePathfinder() picks DynamicPathFinder
     simulationRunning_ = true;
