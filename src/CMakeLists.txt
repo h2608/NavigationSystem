@@ -19,6 +19,10 @@ target_include_directories(NavigationCore PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
+target_link_libraries(NavigationCore PUBLIC
+    Qt5::Core
+)
+
 # GUI library
 add_library(NavigationGui STATIC
     gui/items/NodeItem.cpp

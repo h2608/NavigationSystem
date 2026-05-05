@@ -507,7 +507,7 @@ void MainWindow::onSaveMap() {
     }
 
     QString filePath = QFileDialog::getSaveFileName(
-        this, "保存地图", "", "导航地图文件 (*.navmap);;所有文件 (*)");
+        this, "保存地图", "", "JSON 地图文件 (*.json);;所有文件 (*)");
 
     if (filePath.isEmpty()) {
         return;
@@ -529,7 +529,7 @@ void MainWindow::onSaveMap() {
 
 void MainWindow::onLoadMap() {
     QString filePath = QFileDialog::getOpenFileName(
-        this, "加载地图", "", "导航地图文件 (*.navmap);;所有文件 (*)");
+        this, "加载地图", "", "JSON 地图文件 (*.json);;所有文件 (*)");
 
     if (filePath.isEmpty()) {
         return;

@@ -15,8 +15,8 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTOUIC ON)
 set(CMAKE_AUTORCC ON)
 
-# Find Qt5 Widgets
-find_package(Qt5 5.14 REQUIRED COMPONENTS Widgets)
+# Find Qt5 modules
+find_package(Qt5 5.14 REQUIRED COMPONENTS Core Widgets)
 
 # Add source directory
 add_subdirectory(src)

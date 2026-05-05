@@ -258,7 +258,7 @@ GUI 层不是简单画图，而是负责：
 
 1. 用户触发保存
 2. `MainWindow` 调用 `GraphIO::save()`
-3. `GraphIO` 将图写入 `navmap` 文本文件
+3. `GraphIO` 将图写入 JSON 地图文件
 
 加载：
 
