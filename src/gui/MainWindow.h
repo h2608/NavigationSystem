@@ -40,6 +40,8 @@ private slots:
     void onSimulationStep();
     void onPathFound(const PathResult& result);
     void onStatusMessage(const QString& message);
+    void onViewInteractionBegan();
+    void onViewInteractionEnded();
 
     // 控制面板槽
     void onFindNearestRequested(double x, double y, int k);
@@ -70,6 +72,7 @@ private:
     QTimer* simulationTimer_;
     QAction* simulationAction_;
     bool simulationRunning_ = false;
+    bool simulationSuspendedForInteraction_ = false;
     bool heatmapVisible_ = false;  // 可视化热力图显示的开关
 
     double mapWidth_ = 5000.0;

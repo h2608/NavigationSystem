@@ -17,7 +17,7 @@ public:
                 QGraphicsItem* parent = nullptr);
 
     size_t getMemberCount() const { return memberCount_; }
-    void beginVisualTransition(qreal targetOpacity);
+    bool beginVisualTransition(qreal targetOpacity);
     void applyVisualProgress(qreal progress);
 
     QRectF boundingRect() const override;
@@ -34,6 +34,9 @@ private:
     qreal startOpacity_ = 1.0;
     qreal currentOpacity_ = 1.0;
     qreal targetOpacity_ = 1.0;
+    bool visualStateInitialized_ = false;
+    qreal lastEffectiveOpacity_ = -1.0;
+    bool lastVisible_ = true;
 };
 
 } // namespace nav

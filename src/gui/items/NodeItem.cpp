@@ -1,6 +1,7 @@
 #include "gui/items/NodeItem.h"
 
 #include <algorithm>
+#include <cmath>
 #include <QBrush>
 #include <QPainter>
 #include <QPen>
@@ -32,13 +33,21 @@ void NodeItem::setHighlighted(bool highlighted) {
     refreshVisualState();
 }
 
-void NodeItem::beginVisualTransition(qreal targetOpacity) {
+bool NodeItem::beginVisualTransition(qreal targetOpacity) {
     startOpacity_ = currentOpacity_;
     targetOpacity_ = targetOpacity;
+    return std::abs(targetOpacity_ - currentOpacity_) > 0.01;
 }
 
 void NodeItem::applyVisualProgress(qreal progress) {
-    currentOpacity_ = lerp(startOpacity_, targetOpacity_, progress);
+    const qreal nextOpacity = (progress >= 1.0)
+        ? targetOpacity_
+        : lerp(startOpacity_, targetOpacity_, progress);
+    if (std::abs(nextOpacity - currentOpacity_) < 0.01 && progress < 1.0) {
+        return;
+    }
+
+    currentOpacity_ = nextOpacity;
     refreshVisualState();
 }
 
@@ -71,9 +80,30 @@ void NodeItem::paint(QPainter* painter, const QStyleOptionGraphicsItem* option, 
 
 void NodeItem::refreshVisualState() {
     const qreal effectiveOpacity = highlighted_ ? 1.0 : currentOpacity_;
-    setOpacity(effectiveOpacity);
-    setVisible(effectiveOpacity > 0.02 || highlighted_);
-    update();
+    const bool visible = effectiveOpacity > 0.02 || highlighted_;
+
+    bool needsUpdate = !visualStateInitialized_;
+    if (!visualStateInitialized_ || std::abs(lastEffectiveOpacity_ - effectiveOpacity) >= 0.01) {
+        setOpacity(effectiveOpacity);
+        lastEffectiveOpacity_ = effectiveOpacity;
+        needsUpdate = true;
+    }
+
+    if (!visualStateInitialized_ || lastVisible_ != visible) {
+        setVisible(visible);
+        lastVisible_ = visible;
+        needsUpdate = true;
+    }
+
+    if (!visualStateInitialized_ || lastAppliedHighlighted_ != highlighted_) {
+        lastAppliedHighlighted_ = highlighted_;
+        needsUpdate = true;
+    }
+
+    visualStateInitialized_ = true;
+    if (needsUpdate) {
+        update();
+    }
 }
 
 } // namespace nav

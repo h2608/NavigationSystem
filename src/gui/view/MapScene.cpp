@@ -19,6 +19,13 @@ namespace nav {
 
 namespace {
 
+constexpr int kDisplayWorkBudgetMs = 4;
+constexpr int kMaxEdgesPerChunk = 700;
+constexpr int kMaxNodesPerChunk = 900;
+constexpr int kMaxClustersPerChunk = 250;
+constexpr double kAnimatedEdgeImportance = 0.72;
+constexpr double kPriorityAnimatedEdgeImportance = 0.50;
+
 int edgeCongestionStatus(const Edge& edge) {
     return TrafficModel::getCongestionStatus(
         edge.getCapacity(),
@@ -103,7 +110,7 @@ void MapScene::loadMap(const Graph& graph) {
 }
 
 void MapScene::clearMap() {
-    displayTransitionTimer_.stop();
+    cancelDisplayTransition();
     clearPath();
     clear();
 
@@ -120,7 +127,19 @@ void MapScene::clearMap() {
     pathItem_ = nullptr;
     queryPointMarker_ = nullptr;
     trafficPointMarker_ = nullptr;
+    transitioningEdgeItems_.clear();
+    transitioningNodeItems_.clear();
+    transitioningClusterItems_.clear();
+    pendingTrafficEdgeSet_.clear();
+    displayWorkPhase_ = DisplayWorkPhase::Idle;
+    pendingDisplayWork_ = false;
+    displayWorkQueued_ = false;
     showLabels_ = false;
+    currentViewZoom_ = 1.0;
+    activeClusterLevel_ = -1;
+    lastAppliedBandIndex_ = -1;
+    pathZoomBucket_ = -1;
+    displayBandDirty_ = false;
 }
 
 void MapScene::resetAllEdgeStyles() {
@@ -173,52 +192,262 @@ void MapScene::setActiveClusterLevel(int level) {
     }
 }
 
-void MapScene::transitionToDisplayBand(const ZoomBand& band, double zoom) {
-    currentViewZoom_ = zoom;
+bool MapScene::hasPendingDisplayWork() const {
+    return pendingDisplayWork_ ||
+           displayWorkQueued_ ||
+           displayTransitionTimer_.isActive() ||
+           displayTransitionClock_.isValid();
+}
+
+void MapScene::cancelPendingDisplayBandWork() {
+    pendingDisplayWork_ = false;
+    displayWorkQueued_ = false;
+    displayWorkPhase_ = DisplayWorkPhase::Idle;
+    pendingTrafficEdgeSet_.clear();
+    ++displayWorkGeneration_;
+}
+
+void MapScene::cancelDisplayTransition() {
+    const bool hadWork =
+        pendingDisplayWork_ ||
+        displayWorkQueued_ ||
+        displayTransitionTimer_.isActive() ||
+        displayTransitionClock_.isValid() ||
+        !transitioningEdgeItems_.empty() ||
+        !transitioningNodeItems_.empty() ||
+        !transitioningClusterItems_.empty();
+
+    if (!hadWork) {
+        return;
+    }
+
+    cancelPendingDisplayBandWork();
+    displayTransitionTimer_.stop();
+    displayTransitionClock_.invalidate();
+    transitioningEdgeItems_.clear();
+    transitioningNodeItems_.clear();
+    transitioningClusterItems_.clear();
+    displayBandDirty_ = lastAppliedBandIndex_ >= 0;
+}
+
+void MapScene::requestDisplayBandTransition(int bandIndex, const ZoomBand& band,
+                                            const QRectF& prioritySceneRect) {
+    if (lastAppliedBandIndex_ == bandIndex && !displayBandDirty_ && !pendingDisplayWork_) {
+        return;
+    }
+
+    cancelPendingDisplayBandWork();
+    displayTransitionTimer_.stop();
+    displayTransitionClock_.invalidate();
+    transitioningEdgeItems_.clear();
+    transitioningNodeItems_.clear();
+    transitioningClusterItems_.clear();
+
+    lastAppliedBandIndex_ = bandIndex;
+    displayBandDirty_ = false;
     showLabels_ = band.showLabels;
     activeClusterLevel_ = band.clusterLevel;
-    refreshPathStyle();
-
-    std::unordered_set<Edge::Id> trafficEdgeSet(
+    pendingDisplayBand_ = band;
+    pendingPrioritySceneRect_ = prioritySceneRect;
+    pendingTrafficEdgeSet_ = std::unordered_set<Edge::Id>(
         trafficHighlightedEdges_.begin(),
         trafficHighlightedEdges_.end()
     );
 
-    for (const auto& pair : edgeItems_) {
-        const Edge::Id edgeId = pair.first;
-        EdgeItem* item = pair.second;
-        if (!item || !graph_) continue;
+    pendingEdgeIt_ = edgeItems_.begin();
+    pendingNodeIt_ = nodeItems_.begin();
+    pendingClusterLevelIndex_ = 0;
+    pendingClusterItemIndex_ = 0;
+    displayWorkPhase_ = DisplayWorkPhase::Edges;
+    pendingDisplayWork_ = true;
+    queuePendingDisplayBandChunk();
+}
 
-        const Edge* edge = graph_->getEdge(edgeId);
-        if (!edge) continue;
+void MapScene::transitionToDisplayBand(int bandIndex, const ZoomBand& band) {
+    requestDisplayBandTransition(bandIndex, band);
+}
 
-        const bool forceVisible =
-            highlightedEdges_.count(edgeId) > 0 ||
-            trafficEdgeSet.count(edgeId) > 0;
-
-        item->beginVisualTransition(
-            edgeOpacityForBand(*edge, band, forceVisible),
-            edgeWidthScaleForBand(*edge, band, forceVisible)
-        );
+void MapScene::queuePendingDisplayBandChunk() {
+    if (!pendingDisplayWork_ || displayWorkQueued_) {
+        return;
     }
 
-    for (const auto& pair : nodeItems_) {
-        NodeItem* item = pair.second;
-        if (!item) continue;
-        item->beginVisualTransition(item->isInteractive() ? 1.0 : band.nodeOpacity);
-    }
-
-    for (int i = 0; i < static_cast<int>(clusterLevels_.size()); ++i) {
-        const qreal targetOpacity = (i == band.clusterLevel) ? band.clusterOpacity : 0.0;
-        for (ClusterItem* item : clusterLevels_[i]) {
-            item->beginVisualTransition(targetOpacity);
+    const uint64_t generation = displayWorkGeneration_;
+    displayWorkQueued_ = true;
+    QTimer::singleShot(0, this, [this, generation]() {
+        displayWorkQueued_ = false;
+        if (generation != displayWorkGeneration_ || !pendingDisplayWork_) {
+            return;
         }
+        processPendingDisplayBandChunk();
+    });
+}
+
+void MapScene::processPendingDisplayBandChunk() {
+    if (!pendingDisplayWork_) {
+        return;
+    }
+
+    QElapsedTimer budgetTimer;
+    budgetTimer.start();
+    int processed = 0;
+
+    while (pendingDisplayWork_) {
+        if (displayWorkPhase_ == DisplayWorkPhase::Edges) {
+            if (!processEdgeDisplayWork(budgetTimer, processed)) {
+                queuePendingDisplayBandChunk();
+                return;
+            }
+            displayWorkPhase_ = DisplayWorkPhase::Nodes;
+        }
+
+        if (displayWorkPhase_ == DisplayWorkPhase::Nodes) {
+            if (!processNodeDisplayWork(budgetTimer, processed)) {
+                queuePendingDisplayBandChunk();
+                return;
+            }
+            displayWorkPhase_ = DisplayWorkPhase::Clusters;
+        }
+
+        if (displayWorkPhase_ == DisplayWorkPhase::Clusters) {
+            if (!processClusterDisplayWork(budgetTimer, processed)) {
+                queuePendingDisplayBandChunk();
+                return;
+            }
+            pendingDisplayWork_ = false;
+            displayWorkPhase_ = DisplayWorkPhase::Idle;
+            pendingTrafficEdgeSet_.clear();
+            startDisplayTransitionAnimationOrFinish();
+            return;
+        }
+    }
+}
+
+bool MapScene::processEdgeDisplayWork(QElapsedTimer& budgetTimer, int& processed) {
+    while (pendingEdgeIt_ != edgeItems_.end()) {
+        const Edge::Id edgeId = pendingEdgeIt_->first;
+        EdgeItem* item = pendingEdgeIt_->second;
+        ++pendingEdgeIt_;
+        ++processed;
+
+        if (item && graph_) {
+            if (const Edge* edge = graph_->getEdge(edgeId)) {
+                const bool forceVisible =
+                    highlightedEdges_.count(edgeId) > 0 ||
+                    pendingTrafficEdgeSet_.count(edgeId) > 0;
+                const qreal targetOpacity = edgeOpacityForBand(*edge, pendingDisplayBand_, forceVisible);
+                const double targetWidthScale = edgeWidthScaleForBand(*edge, pendingDisplayBand_, forceVisible);
+
+                if (item->beginVisualTransition(targetOpacity, targetWidthScale)) {
+                    if (shouldAnimateEdgeTransition(*edge, item, forceVisible)) {
+                        transitioningEdgeItems_.push_back(item);
+                    } else {
+                        item->applyVisualProgress(1.0);
+                    }
+                }
+            }
+        }
+
+        if (processed >= kMaxEdgesPerChunk || budgetTimer.elapsed() >= kDisplayWorkBudgetMs) {
+            return pendingEdgeIt_ == edgeItems_.end();
+        }
+    }
+    return true;
+}
+
+bool MapScene::processNodeDisplayWork(QElapsedTimer& budgetTimer, int& processed) {
+    while (pendingNodeIt_ != nodeItems_.end()) {
+        NodeItem* item = pendingNodeIt_->second;
+        ++pendingNodeIt_;
+        ++processed;
+
+        if (item) {
+            if (item->beginVisualTransition(item->isInteractive() ? 1.0 : pendingDisplayBand_.nodeOpacity)) {
+                if (item->isInteractive()) {
+                    transitioningNodeItems_.push_back(item);
+                } else {
+                    item->applyVisualProgress(1.0);
+                }
+            }
+        }
+
+        if (processed >= kMaxNodesPerChunk || budgetTimer.elapsed() >= kDisplayWorkBudgetMs) {
+            return pendingNodeIt_ == nodeItems_.end();
+        }
+    }
+    return true;
+}
+
+bool MapScene::processClusterDisplayWork(QElapsedTimer& budgetTimer, int& processed) {
+    while (pendingClusterLevelIndex_ < clusterLevels_.size()) {
+        auto& level = clusterLevels_[pendingClusterLevelIndex_];
+        while (pendingClusterItemIndex_ < level.size()) {
+            ClusterItem* item = level[pendingClusterItemIndex_];
+            ++pendingClusterItemIndex_;
+            ++processed;
+
+            const qreal targetOpacity =
+                (static_cast<int>(pendingClusterLevelIndex_) == pendingDisplayBand_.clusterLevel)
+                    ? pendingDisplayBand_.clusterOpacity
+                    : 0.0;
+            if (item && item->beginVisualTransition(targetOpacity)) {
+                transitioningClusterItems_.push_back(item);
+            }
+
+            if (processed >= kMaxClustersPerChunk || budgetTimer.elapsed() >= kDisplayWorkBudgetMs) {
+                return pendingClusterLevelIndex_ >= clusterLevels_.size();
+            }
+        }
+
+        pendingClusterItemIndex_ = 0;
+        ++pendingClusterLevelIndex_;
+    }
+    return true;
+}
+
+bool MapScene::shouldAnimateEdgeTransition(const Edge& edge, EdgeItem* item, bool forceVisible) const {
+    if (forceVisible) {
+        return true;
+    }
+
+    if (!pendingPrioritySceneRect_.isEmpty() &&
+        pendingPrioritySceneRect_.intersects(item->sceneBoundingRect())) {
+        return edge.getImportanceScore() >= kPriorityAnimatedEdgeImportance;
+    }
+
+    return edge.getImportanceScore() >= kAnimatedEdgeImportance;
+}
+
+void MapScene::startDisplayTransitionAnimationOrFinish() {
+    if (transitioningEdgeItems_.empty() &&
+        transitioningNodeItems_.empty() &&
+        transitioningClusterItems_.empty()) {
+        displayTransitionTimer_.stop();
+        displayTransitionClock_.invalidate();
+        finishDisplayUpdate();
+        return;
     }
 
     displayTransitionClock_.restart();
     if (!displayTransitionTimer_.isActive()) {
         displayTransitionTimer_.start();
     }
+}
+
+void MapScene::finishDisplayUpdate() {
+    emit displayUpdateFinished();
+}
+
+void MapScene::updateViewZoom(double zoom) {
+    currentViewZoom_ = zoom;
+
+    const int nextBucket = pathZoomBucketFor(zoom);
+    if (nextBucket == pathZoomBucket_) {
+        return;
+    }
+
+    pathZoomBucket_ = nextBucket;
+    refreshPathStyle();
 }
 
 NodeItem* MapScene::getNodeItem(Node::Id id) const {
@@ -542,26 +771,29 @@ void MapScene::advanceDisplayTransition() {
     );
     const qreal eased = QEasingCurve(QEasingCurve::OutCubic).valueForProgress(progress);
 
-    for (const auto& pair : edgeItems_) {
-        if (pair.second) {
-            pair.second->applyVisualProgress(eased);
+    for (EdgeItem* item : transitioningEdgeItems_) {
+        if (item) {
+            item->applyVisualProgress(eased);
         }
     }
-    for (const auto& pair : nodeItems_) {
-        if (pair.second) {
-            pair.second->applyVisualProgress(eased);
+    for (NodeItem* item : transitioningNodeItems_) {
+        if (item) {
+            item->applyVisualProgress(eased);
         }
     }
-    for (auto& level : clusterLevels_) {
-        for (ClusterItem* item : level) {
-            if (item) {
-                item->applyVisualProgress(eased);
-            }
+    for (ClusterItem* item : transitioningClusterItems_) {
+        if (item) {
+            item->applyVisualProgress(eased);
         }
     }
 
     if (progress >= 1.0) {
         displayTransitionTimer_.stop();
+        displayTransitionClock_.invalidate();
+        transitioningEdgeItems_.clear();
+        transitioningNodeItems_.clear();
+        transitioningClusterItems_.clear();
+        finishDisplayUpdate();
     }
 }
 
@@ -579,6 +811,15 @@ void MapScene::refreshPathStyle() {
     pen.setCapStyle(Qt::RoundCap);
     pen.setJoinStyle(Qt::RoundJoin);
     pathItem_->setPen(pen);
+}
+
+int MapScene::pathZoomBucketFor(double zoom) const {
+    const double normalized = std::clamp(
+        (std::log2(std::max(zoom, 0.05)) + 3.0) / 5.0,
+        0.0,
+        1.0
+    );
+    return static_cast<int>(std::lround(normalized * 8.0));
 }
 
 qreal MapScene::edgeOpacityForBand(const Edge& edge, const ZoomBand& band, bool forceVisible) const {

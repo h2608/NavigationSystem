@@ -26,15 +26,24 @@ ClusterItem::ClusterItem(const Point2D& position, size_t memberCount,
     setBrush(QBrush(QColor(82, 120, 168, 185)));
     setPen(QPen(QColor(55, 84, 124), 1.2));
     setZValue(11.0);
+    setCacheMode(QGraphicsItem::DeviceCoordinateCache);
 }
 
-void ClusterItem::beginVisualTransition(qreal targetOpacity) {
+bool ClusterItem::beginVisualTransition(qreal targetOpacity) {
     startOpacity_ = currentOpacity_;
     targetOpacity_ = targetOpacity;
+    return std::abs(targetOpacity_ - currentOpacity_) > 0.01;
 }
 
 void ClusterItem::applyVisualProgress(qreal progress) {
-    currentOpacity_ = lerp(startOpacity_, targetOpacity_, progress);
+    const qreal nextOpacity = (progress >= 1.0)
+        ? targetOpacity_
+        : lerp(startOpacity_, targetOpacity_, progress);
+    if (std::abs(nextOpacity - currentOpacity_) < 0.01 && progress < 1.0) {
+        return;
+    }
+
+    currentOpacity_ = nextOpacity;
     refreshVisualState();
 }
 
@@ -79,9 +88,25 @@ void ClusterItem::paint(QPainter* painter,
 }
 
 void ClusterItem::refreshVisualState() {
-    setOpacity(currentOpacity_);
-    setVisible(currentOpacity_ > 0.02);
-    update();
+    const bool visible = currentOpacity_ > 0.02;
+    bool needsUpdate = !visualStateInitialized_;
+
+    if (!visualStateInitialized_ || std::abs(lastEffectiveOpacity_ - currentOpacity_) >= 0.01) {
+        setOpacity(currentOpacity_);
+        lastEffectiveOpacity_ = currentOpacity_;
+        needsUpdate = true;
+    }
+
+    if (!visualStateInitialized_ || lastVisible_ != visible) {
+        setVisible(visible);
+        lastVisible_ = visible;
+        needsUpdate = true;
+    }
+
+    visualStateInitialized_ = true;
+    if (needsUpdate) {
+        update();
+    }
 }
 
 } // namespace nav

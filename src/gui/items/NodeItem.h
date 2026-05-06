@@ -21,7 +21,7 @@ public:
     void setHighlighted(bool highlighted);
     bool isHighlighted() const { return highlighted_; }
     bool isInteractive() const { return highlighted_; }
-    void beginVisualTransition(qreal targetOpacity);
+    bool beginVisualTransition(qreal targetOpacity);
     void applyVisualProgress(qreal progress);
 
     QRectF boundingRect() const override;
@@ -36,6 +36,10 @@ private:
     qreal startOpacity_ = 1.0;
     qreal currentOpacity_ = 1.0;
     qreal targetOpacity_ = 1.0;
+    bool visualStateInitialized_ = false;
+    qreal lastEffectiveOpacity_ = -1.0;
+    bool lastVisible_ = true;
+    bool lastAppliedHighlighted_ = false;
 };
 
 } // namespace nav

@@ -11,6 +11,8 @@
 #include <QStatusBar>
 #include <QLabel>
 #include <QFileDialog>
+#include <QKeySequence>
+#include <QList>
 #include <QMessageBox>
 #include <algorithm>
 #include <iostream>
@@ -46,6 +48,8 @@ MainWindow::MainWindow(QWidget* parent)
         QMessageBox::warning(this, title, msg);
         statusBar()->showMessage(msg);
     });
+    connect(mapView_, &MapView::interactionBegan, this, &MainWindow::onViewInteractionBegan);
+    connect(mapView_, &MapView::interactionEnded, this, &MainWindow::onViewInteractionEnded);
 
     // 设置窗口属性
     setWindowTitle("导航系统");
@@ -97,6 +101,16 @@ void MainWindow::setupMenuBar() {
     QAction* zoomFitAction = viewMenu->addAction("适应窗口(&F)");
     zoomFitAction->setShortcut(QKeySequence("Ctrl+0"));
     connect(zoomFitAction, &QAction::triggered, this, &MainWindow::onZoomToFit);
+
+    QAction* zoomInAction = viewMenu->addAction("放大(&I)");
+    QList<QKeySequence> zoomInShortcuts;
+    zoomInShortcuts << QKeySequence("Ctrl++") << QKeySequence("Ctrl+=");
+    zoomInAction->setShortcuts(zoomInShortcuts);
+    connect(zoomInAction, &QAction::triggered, mapView_, &MapView::zoomIn);
+
+    QAction* zoomOutAction = viewMenu->addAction("缩小(&O)");
+    zoomOutAction->setShortcut(QKeySequence("Ctrl+-"));
+    connect(zoomOutAction, &QAction::triggered, mapView_, &MapView::zoomOut);
 
     // 仿真菜单
     QMenu* simMenu = menuBar()->addMenu("仿真(&S)");
@@ -171,6 +185,7 @@ void MainWindow::generateNewMap(int numNodes, double width, double height) {
     // 暂时停止仿真定时器
     simulationTimer_->stop();
 
+    simulationSuspendedForInteraction_ = false;
     mapWidth_ = width;
     mapHeight_ = height;
 
@@ -206,7 +221,12 @@ void MainWindow::startSimulation() {
 
     loadGraph(*graph_);
 
-    simulationTimer_->start(100);
+    if (mapView_ && mapView_->isInteractionActive()) {
+        simulationSuspendedForInteraction_ = true;
+    } else {
+        simulationTimer_->start(100);
+        simulationSuspendedForInteraction_ = false;
+    }
     std::cout << "Traffic simulation started (background)" << std::endl;
 
     heatmapVisible_ = false;
@@ -312,6 +332,24 @@ void MainWindow::onSimulationStep() {
             mapScene_->updateTrafficHighlights(*graph_);
         }
     }
+}
+
+void MainWindow::onViewInteractionBegan() {
+    if (!simulationRunning_ || simulationSuspendedForInteraction_ || !simulationTimer_->isActive()) {
+        return;
+    }
+
+    simulationTimer_->stop();
+    simulationSuspendedForInteraction_ = true;
+}
+
+void MainWindow::onViewInteractionEnded() {
+    if (!simulationRunning_ || !simulationSuspendedForInteraction_ || !simulator_) {
+        return;
+    }
+
+    simulationTimer_->start(100);
+    simulationSuspendedForInteraction_ = false;
 }
 
 void MainWindow::onPathFound(const PathResult& result) {

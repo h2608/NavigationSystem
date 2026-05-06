@@ -5,6 +5,7 @@
 #include <QColor>
 
 #include "core/graph/Edge.h"
+#include "gui/items/RoadStyle.h"
 
 namespace nav {
 
@@ -23,7 +24,7 @@ public:
     void applyBaseStyle();
     void setSpatialHighlight(bool highlighted, const QColor& color = QColor());
     void setTrafficFocus(bool focused);
-    void beginVisualTransition(qreal targetOpacity, double targetWidthScale);
+    bool beginVisualTransition(qreal targetOpacity, double targetWidthScale);
     void applyVisualProgress(qreal progress);
 
 protected:
@@ -40,6 +41,7 @@ private:
     RoadClass roadClass_;
     DisplayTier displayTier_;
     double importanceScore_;
+    RoadStyle baseStyle_;
     int congestionStatus_ = 0;
     bool spatialHighlighted_ = false;
     QColor spatialHighlightColor_;
@@ -51,6 +53,12 @@ private:
     double startWidthScale_ = 1.0;
     double currentWidthScale_ = 1.0;
     double targetWidthScale_ = 1.0;
+    bool visualStateInitialized_ = false;
+    qreal lastEffectiveOpacity_ = -1.0;
+    bool lastVisible_ = true;
+    QColor lastBoundingPenColor_;
+    double lastBoundingPenWidth_ = -1.0;
+    double lastZValue_ = -1.0;
 };
 
 } // namespace nav
