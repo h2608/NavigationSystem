@@ -2,39 +2,48 @@
 #define ROADSTYLE_H
 
 #include <QColor>
+
 #include "core/graph/Edge.h"
 
 namespace nav {
 
-// 道路等级的视觉样式参数
 struct RoadStyle {
-    QColor color;          // 默认颜色（无交通热力图时）
-    double width;          // 线宽
-    double zValue;         // 绘制层级
+    QColor fillColor;
+    QColor casingColor;
+    double width;
+    double casingWidth;
+    double zValue;
 
-    // 获取指定道路等级的预定义样式
-    static RoadStyle forRoadClass(RoadClass rc) {
-        switch (rc) {
-            case RoadClass::Arterial:
-                // 深蓝灰色，宽3.0，z=2
-                return {QColor(55, 71, 79), 3.0, 2.0};
-            case RoadClass::Secondary:
-                // 中灰色，宽2.0，z=1
-                return {QColor(120, 144, 156), 2.0, 1.0};
-            case RoadClass::Local:
+    static RoadStyle forTier(DisplayTier tier, RoadClass roadClass, double importanceScore) {
+        switch (tier) {
+            case DisplayTier::Primary:
+                return {QColor(246, 246, 242), QColor(112, 122, 132), 3.4, 4.8, 3.0 + importanceScore * 0.5};
+            case DisplayTier::Secondary:
+                return {QColor(240, 243, 239), QColor(145, 154, 162), 2.4, 3.4, 2.0 + importanceScore * 0.4};
+            case DisplayTier::Local:
+                return {QColor(235, 239, 234), QColor(172, 180, 170), 1.6, 2.3, 1.1 + importanceScore * 0.3};
+            case DisplayTier::Detail:
             default:
-                // 浅灰绿色，宽1.0，z=0
-                return {QColor(176, 190, 176), 1.0, 0.0};
+                if (roadClass == RoadClass::Arterial) {
+                    return {QColor(243, 243, 238), QColor(122, 132, 142), 2.8, 4.0, 2.6};
+                }
+                return {QColor(231, 236, 231), QColor(184, 191, 182), 1.1, 1.6, 0.6};
         }
     }
 
-    // 拥堵状态下根据道路等级调整线宽
-    static double congestionWidth(RoadClass rc, int status) {
-        double base = forRoadClass(rc).width;
+    static QColor congestionColor(int status) {
         switch (status) {
-            case 1: return base + 0.5;  // 黄色：稍粗
-            case 2: return base + 1.0;  // 红色：更粗
-            default: return base;
+            case 1: return QColor(255, 193, 7);
+            case 2: return QColor(244, 67, 54);
+            default: return QColor(158, 158, 158);
+        }
+    }
+
+    static double congestionWidthBoost(int status) {
+        switch (status) {
+            case 1: return 0.5;
+            case 2: return 1.0;
+            default: return 0.0;
         }
     }
 };

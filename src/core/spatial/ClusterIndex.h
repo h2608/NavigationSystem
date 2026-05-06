@@ -30,6 +30,10 @@ public:
                                double mapHeight,
                                const std::vector<double>& cellSizes);
 
+    void buildAdaptiveMultiResolution(const Graph& graph, double mapWidth,
+                                      double mapHeight,
+                                      const std::vector<size_t>& targetCounts);
+
     const std::vector<Cluster>& getClusters() const {
         return clusters_;
     }
@@ -43,6 +47,10 @@ public:
 private:
     void buildSingleLevel(const Graph& graph, double mapWidth,
                            double gridCellSize, std::vector<Cluster>& out);
+
+    void buildAdaptiveLevel(const Graph& graph, double mapWidth,
+                            double mapHeight, size_t targetCount,
+                            std::vector<Cluster>& out);
 
     std::vector<Cluster> clusters_;
     std::vector<ClusterLevel> levels_;

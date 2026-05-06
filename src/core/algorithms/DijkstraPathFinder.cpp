@@ -62,7 +62,10 @@ PathResult DijkstraPathFinder::findPath(const Graph& graph, Node::Id start, Node
             if (!edge) continue;
 
             // 确定邻居节点（边的另一个端点）
-            Node::Id neighbor = (edge->getSource() == currentNode) ? edge->getTarget() : edge->getSource();
+            Node::Id neighbor = edge->getTraversableTarget(currentNode);
+            if (neighbor == Node::INVALID_ID) {
+                continue;
+            }
 
             // 如果已访问则跳过
             if (visited[neighbor]) {
@@ -132,7 +135,13 @@ void DijkstraPathFinder::reconstructPath(const Graph& graph,
         reverseEdges.push_back(edgeId);
 
         // 移动到边的另一个端点
-        current = (edge->getSource() == current) ? edge->getTarget() : edge->getSource();
+        current = edge->getOppositeNode(current);
+        if (current == Node::INVALID_ID) {
+            result.found = false;
+            result.pathNodes.clear();
+            result.pathEdges.clear();
+            return;
+        }
         reversePath.push_back(current);
     }
 

@@ -56,6 +56,46 @@ struct TempEdge {
     double weight;
 };
 
+double clamp01(double value) {
+    return std::max(0.0, std::min(1.0, value));
+}
+
+void configureGeneratedEdge(Edge* edge, RoadClass roadClass, double capacity) {
+    if (!edge) return;
+
+    edge->setRoadClass(roadClass);
+    edge->setCapacity(capacity);
+
+    double minCapacity = 4.0;
+    double maxCapacity = 6.0;
+    double baseImportance = 0.18;
+    double range = 0.22;
+
+    switch (roadClass) {
+        case RoadClass::Arterial:
+            minCapacity = 18.0;
+            maxCapacity = 22.0;
+            baseImportance = 0.82;
+            range = 0.18;
+            break;
+        case RoadClass::Secondary:
+            minCapacity = 10.0;
+            maxCapacity = 14.0;
+            baseImportance = 0.52;
+            range = 0.22;
+            break;
+        case RoadClass::Local:
+        default:
+            break;
+    }
+
+    const double normalized = clamp01((capacity - minCapacity) / (maxCapacity - minCapacity));
+    const double importance = clamp01(baseImportance + normalized * range);
+
+    edge->setImportanceScore(importance);
+    edge->setDisplayTier(displayTierForImportance(importance));
+}
+
 } // anonymous namespace
 
 HierarchicalRoadGenerator::HierarchicalRoadGenerator()
@@ -144,7 +184,7 @@ void HierarchicalRoadGenerator::generateArterials(Graph& graph,
         for (size_t k = 1; k < corridor.size(); ++k) {
             Edge::Id eid = graph.addEdge(corridor[k-1], corridor[k], RoadClass::Arterial);
             Edge* e = graph.getEdge(eid);
-            if (e) e->setCapacity(20.0 + capacityNoise(rng_));
+            configureGeneratedEdge(e, RoadClass::Arterial, 20.0 + capacityNoise(rng_));
         }
 
         hCorridors.push_back(std::move(corridor));
@@ -182,7 +222,7 @@ void HierarchicalRoadGenerator::generateArterials(Graph& graph,
         for (size_t k = 1; k < corridor.size(); ++k) {
             Edge::Id eid = graph.addEdge(corridor[k-1], corridor[k], RoadClass::Arterial);
             Edge* e = graph.getEdge(eid);
-            if (e) e->setCapacity(20.0 + capacityNoise(rng_));
+            configureGeneratedEdge(e, RoadClass::Arterial, 20.0 + capacityNoise(rng_));
         }
 
         vCorridors.push_back(std::move(corridor));
@@ -212,7 +252,7 @@ void HierarchicalRoadGenerator::generateArterials(Graph& graph,
                 bestDist < nodeSpacingH * 1.5) {
                 Edge::Id eid = graph.addEdge(bestH, bestV, RoadClass::Arterial);
                 Edge* e = graph.getEdge(eid);
-                if (e) e->setCapacity(20.0 + capacityNoise(rng_));
+                configureGeneratedEdge(e, RoadClass::Arterial, 20.0 + capacityNoise(rng_));
             }
         }
     }
@@ -275,7 +315,7 @@ void HierarchicalRoadGenerator::generateSecondaries(Graph& graph,
             if (corridor[k-1] != corridor[k]) {
                 Edge::Id eid = graph.addEdge(corridor[k-1], corridor[k], RoadClass::Secondary);
                 Edge* e = graph.getEdge(eid);
-                if (e) e->setCapacity(12.0 + capacityNoise(rng_));
+                configureGeneratedEdge(e, RoadClass::Secondary, 12.0 + capacityNoise(rng_));
             }
         }
     }
@@ -311,7 +351,7 @@ void HierarchicalRoadGenerator::generateSecondaries(Graph& graph,
             if (corridor[k-1] != corridor[k]) {
                 Edge::Id eid = graph.addEdge(corridor[k-1], corridor[k], RoadClass::Secondary);
                 Edge* e = graph.getEdge(eid);
-                if (e) e->setCapacity(12.0 + capacityNoise(rng_));
+                configureGeneratedEdge(e, RoadClass::Secondary, 12.0 + capacityNoise(rng_));
             }
         }
     }
@@ -467,12 +507,12 @@ void HierarchicalRoadGenerator::generateLocals(Graph& graph,
     for (const auto& edge : mstEdges) {
         Edge::Id eid = graph.addEdge(edge.source, edge.target, RoadClass::Local);
         Edge* e = graph.getEdge(eid);
-        if (e) e->setCapacity(5.0 + capacityNoise(rng_));
+        configureGeneratedEdge(e, RoadClass::Local, 5.0 + capacityNoise(rng_));
     }
     for (const auto& edge : nonMstEdges) {
         Edge::Id eid = graph.addEdge(edge.source, edge.target, RoadClass::Local);
         Edge* e = graph.getEdge(eid);
-        if (e) e->setCapacity(5.0 + capacityNoise(rng_));
+        configureGeneratedEdge(e, RoadClass::Local, 5.0 + capacityNoise(rng_));
     }
 
     // 将部分支路节点连接到最近的高级别节点
@@ -489,7 +529,7 @@ void HierarchicalRoadGenerator::generateLocals(Graph& graph,
                 if (dist < cellWidth * 2.0) {
                     Edge::Id eid = graph.addEdge(localNode, nearest, RoadClass::Local);
                     Edge* e = graph.getEdge(eid);
-                    if (e) e->setCapacity(5.0 + capacityNoise(rng_));
+                    configureGeneratedEdge(e, RoadClass::Local, 5.0 + capacityNoise(rng_));
                 }
             }
         }
@@ -581,7 +621,7 @@ void HierarchicalRoadGenerator::ensureConnectivity(Graph& graph) {
         if (bestA != Node::INVALID_ID && bestB != Node::INVALID_ID) {
             Edge::Id eid = graph.addEdge(bestA, bestB, RoadClass::Secondary);
             Edge* e = graph.getEdge(eid);
-            if (e) e->setCapacity(12.0 + capacityNoise(rng_));
+            configureGeneratedEdge(e, RoadClass::Secondary, 12.0 + capacityNoise(rng_));
             // 更新并查集
             uf.unite(idToIndex[bestA], idToIndex[bestB]);
         }

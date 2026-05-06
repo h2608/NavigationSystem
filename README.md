@@ -19,17 +19,58 @@
 
 ## 构建说明
 
+当前仓库在 Windows 上**已验证可用**的构建方式是：
+
+- Qt：`E:/Qt/5.14.2/mingw73_64`
+- 编译器：`E:/Qt/Tools/mingw730_64/bin/g++.exe`
+- 生成器：`MinGW Makefiles`
+
+不要将 `E:/Qt/5.14.2/mingw73_64` 和 `Visual Studio / MSVC` 混用，否则会出现 Qt 链接错误。
+
+如果之前已经用别的工具链配置过 `build/`，先删除旧的 `build/` 目录，再重新配置。
+
+### Bash
+
 ```bash
-mkdir build
-cd build
-cmake ..
-cmake --build .
+rm -rf build
+
+cmake -S . -B build -G "MinGW Makefiles" \
+  -DCMAKE_BUILD_TYPE=Debug \
+  -DCMAKE_C_COMPILER="E:/Qt/Tools/mingw730_64/bin/gcc.exe" \
+  -DCMAKE_CXX_COMPILER="E:/Qt/Tools/mingw730_64/bin/g++.exe" \
+  -DCMAKE_MAKE_PROGRAM="E:/Qt/Tools/mingw730_64/bin/mingw32-make.exe" \
+  -DQt5_DIR="E:/Qt/5.14.2/mingw73_64/lib/cmake/Qt5"
+
+cmake --build build -j4
+```
+
+### PowerShell
+
+```powershell
+Remove-Item -Recurse -Force .\build -ErrorAction SilentlyContinue
+
+cmake -S . -B build -G "MinGW Makefiles" `
+  -DCMAKE_BUILD_TYPE=Debug `
+  -DCMAKE_C_COMPILER="E:/Qt/Tools/mingw730_64/bin/gcc.exe" `
+  -DCMAKE_CXX_COMPILER="E:/Qt/Tools/mingw730_64/bin/g++.exe" `
+  -DCMAKE_MAKE_PROGRAM="E:/Qt/Tools/mingw730_64/bin/mingw32-make.exe" `
+  -DQt5_DIR="E:/Qt/5.14.2/mingw73_64/lib/cmake/Qt5"
+
+cmake --build build -j4
 ```
 
 ## 运行
 
+### Bash
+
 ```bash
-./NavigationSystem
+./build/src/NavigationSystem.exe
+```
+
+### PowerShell
+
+```powershell
+.\build\src\NavigationSystem.exe
 ```
 
 ## 项目结构

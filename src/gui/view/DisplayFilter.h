@@ -1,45 +1,91 @@
 #ifndef DISPLAYFILTER_H
 #define DISPLAYFILTER_H
 
-#include "core/graph/Edge.h"
+#include <algorithm>
+#include <limits>
 #include <vector>
 
 namespace nav {
 
-// 缩放级别带的可见性规则
 struct ZoomBand {
-    double minZoom;          // 此带的最小缩放值
-    double maxZoom;          // 此带的最大缩放值
-    bool showLocalEdges;     // 是否显示支路
-    bool showSecondaryEdges; // 是否显示次干道
-    bool showArterialEdges;  // 是否显示主干道（始终 true）
-    bool showNormalNodes;    // 是否显示普通节点
-    int clusterLevel;        // 聚类层级 (-1=隐藏, 0=粗粒度, 1=细粒度)
+    const char* name;
+    double enterMinZoom;
+    double enterMaxZoom;
+    double exitMinZoom;
+    double exitMaxZoom;
+    double edgeOpacity;
+    double minEdgeImportance;
+    double widthScale;
+    double nodeOpacity;
+    double clusterOpacity;
+    bool showLabels;
+    int clusterLevel;
 };
 
-// 缩放级别相关的可见性策略
 class DisplayFilter {
 public:
     DisplayFilter() {
-        // 高缩放 (>= 1.0): 全部显示，隐藏聚类
-        bands_.push_back({1.0, 1e9, true, true, true, true, -1});
-        // 中缩放 (0.2 ~ 1.0): 隐藏支路和普通节点，细粒度聚类
-        bands_.push_back({0.2, 1.0, false, true, true, false, 1});
-        // 低缩放 (< 0.2): 仅主干道 + 粗粒度聚类
-        bands_.push_back({0.0, 0.2, false, false, true, false, 0});
+        const double inf = std::numeric_limits<double>::infinity();
+
+        bands_.push_back({
+            "overview", 0.0, 0.08, 0.0, 0.08 * 1.12,
+            0.92, 0.82, 0.95, 0.0, 0.95, false, 0
+        });
+        bands_.push_back({
+            "city", 0.08, 0.18, 0.08 * 0.88, 0.18 * 1.12,
+            0.88, 0.68, 1.00, 0.0, 0.78, false, 0
+        });
+        bands_.push_back({
+            "district", 0.18, 0.35, 0.18 * 0.88, 0.35 * 1.12,
+            0.90, 0.55, 1.05, 0.0, 0.42, false, 1
+        });
+        bands_.push_back({
+            "area", 0.35, 0.70, 0.35 * 0.88, 0.70 * 1.12,
+            0.94, 0.40, 1.10, 0.18, 0.12, false, 1
+        });
+        bands_.push_back({
+            "street", 0.70, 1.40, 0.70 * 0.88, 1.40 * 1.12,
+            0.98, 0.20, 1.18, 0.58, 0.0, true, -1
+        });
+        bands_.push_back({
+            "detail", 1.40, inf, 1.40 * 0.88, inf,
+            1.00, 0.0, 1.26, 1.0, 0.0, true, -1
+        });
     }
 
-    // 根据当前缩放级别获取可见性规则
-    const ZoomBand& getBand(double zoom) const {
-        for (const auto& band : bands_) {
-            if (zoom >= band.minZoom && zoom < band.maxZoom) {
-                return band;
+    int getBandIndex(double zoom, int currentIndex) const {
+        if (bands_.empty()) return -1;
+
+        const int clampedCurrent = clampIndex(currentIndex);
+        if (clampedCurrent >= 0) {
+            const ZoomBand& current = bands_[clampedCurrent];
+            if (zoom >= current.exitMinZoom && zoom < current.exitMaxZoom) {
+                return clampedCurrent;
             }
         }
-        return bands_.front();  // 兜底：全部显示
+
+        for (int i = 0; i < static_cast<int>(bands_.size()); ++i) {
+            const ZoomBand& band = bands_[i];
+            if (zoom >= band.enterMinZoom && zoom < band.enterMaxZoom) {
+                return i;
+            }
+        }
+
+        if (zoom < bands_.front().enterMaxZoom) return 0;
+        return static_cast<int>(bands_.size()) - 1;
+    }
+
+    const ZoomBand& getBand(int index) const {
+        return bands_[static_cast<size_t>(std::max(0, std::min(index, static_cast<int>(bands_.size()) - 1)))];
     }
 
 private:
+    int clampIndex(int index) const {
+        if (bands_.empty()) return -1;
+        if (index < 0 || index >= static_cast<int>(bands_.size())) return -1;
+        return index;
+    }
+
     std::vector<ZoomBand> bands_;
 };
 

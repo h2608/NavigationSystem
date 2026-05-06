@@ -1,8 +1,12 @@
 #ifndef MAPVIEW_H
 #define MAPVIEW_H
 
+#include <QElapsedTimer>
 #include <QGraphicsView>
+#include <QPointF>
 #include <QRectF>
+#include <QTimer>
+
 #include "gui/view/DisplayFilter.h"
 
 namespace nav {
@@ -13,32 +17,42 @@ class MapView : public QGraphicsView {
 public:
     explicit MapView(QWidget* parent = nullptr);
 
-    // 缩放以适应所有内容
     void zoomToFit();
-
-    // 根据当前缩放更新 LOD 可见性
     void updateLOD();
-
-    // 获取当前缩放级别
     double getCurrentZoom() const { return currentZoom_; }
-
-    // 聚焦到特定点并使用合理的缩放级别
     void focusOnPoint(double x, double y, double zoomLevel = 2.0);
-
-    // 聚焦到带填充的边界矩形
     void focusOnBounds(const QRectF& bounds, double padding = 50.0);
 
 protected:
-    // 重写滚轮事件以在光标处居中缩放
     void wheelEvent(QWheelEvent* event) override;
 
 private:
+    void scheduleLODUpdate();
+    void startCameraAnimation(const QPointF& targetCenter, double targetZoom, int durationMs);
+    void stopCameraAnimation(bool snapToTarget = false);
+    void advanceCameraAnimation();
+    void applyCameraFrame(double zoom, const QPointF& center);
+    QPointF currentViewCenter() const;
+    double computeZoomForBounds(const QRectF& bounds) const;
+
     static constexpr double ZOOM_FACTOR = 1.15;
     static constexpr double MIN_ZOOM = 0.01;
     static constexpr double MAX_ZOOM = 100.0;
+    static constexpr int LOD_THROTTLE_MS = 24;
+    static constexpr int CAMERA_FRAME_MS = 16;
 
     DisplayFilter displayFilter_;
     double currentZoom_ = 1.0;
+    int currentBandIndex_ = -1;
+
+    QTimer lodUpdateTimer_;
+    QTimer cameraAnimationTimer_;
+    QElapsedTimer cameraAnimationClock_;
+    QPointF cameraStartCenter_;
+    QPointF cameraTargetCenter_;
+    double cameraStartZoom_ = 1.0;
+    double cameraTargetZoom_ = 1.0;
+    int cameraDurationMs_ = 180;
 };
 
 } // namespace nav

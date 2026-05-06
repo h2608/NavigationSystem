@@ -52,6 +52,8 @@ Edge::Id Graph::addEdgeWithId(Edge::Id id, Node::Id source, Node::Id target,
     Edge edge(id, source, target, length);
     edge.setCapacity(capacity);
     edge.setRoadClass(roadClass);
+    edge.setImportanceScore(defaultImportanceForRoadClass(roadClass));
+    edge.setDisplayTier(defaultDisplayTierForRoadClass(roadClass));
     edges_.emplace(id, edge);
     adjacencyList_[source].push_back(id);
     adjacencyList_[target].push_back(id);
@@ -84,8 +86,10 @@ std::vector<Node::Id> Graph::getNeighbors(Node::Id nodeId) const {
         const Edge* edge = getEdge(edgeId);
         if (edge) {
             // 添加边的另一个端点
-            Node::Id neighbor = (edge->getSource() == nodeId) ? edge->getTarget() : edge->getSource();
-            neighbors.push_back(neighbor);
+            Node::Id neighbor = edge->getTraversableTarget(nodeId);
+            if (neighbor != Node::INVALID_ID) {
+                neighbors.push_back(neighbor);
+            }
         }
     }
 
@@ -124,8 +128,8 @@ void Graph::dfsVisit(Node::Id nodeId, std::unordered_map<Node::Id, bool>& visite
     for (Edge::Id edgeId : adjacentEdges) {
         const Edge* edge = getEdge(edgeId);
         if (edge) {
-            Node::Id neighbor = (edge->getSource() == nodeId) ? edge->getTarget() : edge->getSource();
-            if (!visited[neighbor]) {
+            Node::Id neighbor = edge->getTraversableTarget(nodeId);
+            if (neighbor != Node::INVALID_ID && !visited[neighbor]) {
                 dfsVisit(neighbor, visited);
             }
         }

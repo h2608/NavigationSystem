@@ -1,13 +1,19 @@
 #include "gui/view/MapScene.h"
-#include "gui/items/NodeItem.h"
-#include "gui/items/EdgeItem.h"
-#include "gui/items/ClusterItem.h"
-#include "core/traffic/TrafficModel.h"
-#include "core/spatial/ClusterIndex.h"
+
 #include <QGraphicsSceneMouseEvent>
+#include <QList>
 #include <QPainterPath>
 #include <QPen>
-#include <iostream>
+#include <QEasingCurve>
+
+#include <algorithm>
+#include <cmath>
+#include <limits>
+
+#include "core/spatial/ClusterIndex.h"
+#include "core/traffic/TrafficModel.h"
+#include "gui/items/EdgeItem.h"
+#include "gui/items/NodeItem.h"
 
 namespace nav {
 
@@ -24,62 +30,83 @@ int edgeDisplayStatus(const Edge& edge, bool heatmapVisible) {
     return heatmapVisible ? edgeCongestionStatus(edge) : 0;
 }
 
+qreal smoothstep(qreal edge0, qreal edge1, qreal x) {
+    if (edge0 == edge1) {
+        return x < edge0 ? 0.0 : 1.0;
+    }
+    const qreal t = std::clamp((x - edge0) / (edge1 - edge0), 0.0, 1.0);
+    return t * t * (3.0 - 2.0 * t);
+}
+
+std::vector<size_t> adaptiveClusterTargets(size_t nodeCount) {
+    if (nodeCount == 0) {
+        return {};
+    }
+
+    const double root = std::sqrt(static_cast<double>(nodeCount));
+    size_t overview = static_cast<size_t>(std::lround(root * 0.45));
+    size_t district = static_cast<size_t>(std::lround(root * 1.25));
+
+    overview = std::clamp(overview, static_cast<size_t>(8), static_cast<size_t>(70));
+    district = std::clamp(district, static_cast<size_t>(24), static_cast<size_t>(220));
+
+    overview = std::min(overview, nodeCount);
+    district = std::min(std::max(district, overview), nodeCount);
+    return {overview, district};
+}
+
 } // namespace
 
 MapScene::MapScene(QObject* parent)
     : QGraphicsScene(parent)
 {
-    // 设置浅灰色背景
-    setBackgroundBrush(QBrush(QColor(245, 245, 245)));
+    setBackgroundBrush(QBrush(QColor(249, 249, 246)));
+
+    displayTransitionTimer_.setInterval(16);
+    connect(&displayTransitionTimer_, &QTimer::timeout, this, &MapScene::advanceDisplayTransition);
 }
 
 void MapScene::loadMap(const Graph& graph) {
-    // Clear existing items
     clearMap();
-
-    // 禁用批量插入期间的索引以提高性能
     setItemIndexMethod(NoIndex);
 
-    // 首先添加边（使其显示在节点下方）
     for (const auto& edgePair : graph.getEdges()) {
         const Edge& edge = edgePair.second;
-
         const Node* sourceNode = graph.getNode(edge.getSource());
         const Node* targetNode = graph.getNode(edge.getTarget());
+        if (!sourceNode || !targetNode) continue;
 
-        if (sourceNode && targetNode) {
-            EdgeItem* item = new EdgeItem(
-                edge.getId(),
-                sourceNode->getPosition(),
-                targetNode->getPosition(),
-                edge.getRoadClass()
-            );
-            addItem(item);
-            edgeItems_[edge.getId()] = item;
-        }
+        EdgeItem* item = new EdgeItem(
+            edge.getId(),
+            sourceNode->getPosition(),
+            targetNode->getPosition(),
+            edge.getRoadClass(),
+            edge.getDisplayTier(),
+            edge.getImportanceScore()
+        );
+        addItem(item);
+        edgeItems_[edge.getId()] = item;
     }
 
-    // 添加节点
     for (const auto& nodePair : graph.getNodes()) {
         const Node& node = nodePair.second;
-
         NodeItem* item = new NodeItem(node.getId(), node.getPosition());
         addItem(item);
         nodeItems_[node.getId()] = item;
     }
 
-    // 重新启用 BSP 树索引以进行高效查询
     setItemIndexMethod(BspTreeIndex);
 
-    // 设置场景矩形以适应所有项目并留出一些填充
-    QRectF bounds = itemsBoundingRect();
-    double padding = 100.0;
+    const QRectF bounds = itemsBoundingRect();
+    const double padding = 100.0;
     setSceneRect(bounds.adjusted(-padding, -padding, padding, padding));
 }
 
 void MapScene::clearMap() {
+    displayTransitionTimer_.stop();
     clearPath();
     clear();
+
     nodeItems_.clear();
     edgeItems_.clear();
     highlightedNodes_.clear();
@@ -93,16 +120,18 @@ void MapScene::clearMap() {
     pathItem_ = nullptr;
     queryPointMarker_ = nullptr;
     trafficPointMarker_ = nullptr;
+    showLabels_ = false;
 }
 
 void MapScene::resetAllEdgeStyles() {
     for (auto& pair : edgeItems_) {
+        pair.second->setSpatialHighlight(false);
+        pair.second->setTrafficFocus(false);
         pair.second->applyBaseStyle();
     }
 }
 
 void MapScene::buildClusters(const Graph& graph, double mapWidth, double mapHeight) {
-    // 清除旧聚类项
     for (auto& level : clusterLevels_) {
         for (ClusterItem* item : level) {
             removeItem(item);
@@ -112,22 +141,20 @@ void MapScene::buildClusters(const Graph& graph, double mapWidth, double mapHeig
     clusterLevels_.clear();
     activeClusterLevel_ = -1;
 
-    // 构建多分辨率聚类索引
-    double maxDim = std::max(mapWidth, mapHeight);
-    std::vector<double> cellSizes = {
-        maxDim / 15.0,   // Level 0: 粗粒度（低缩放）
-        maxDim / 50.0    // Level 1: 细粒度（中缩放）
-    };
-
     ClusterIndex index;
-    index.buildMultiResolution(graph, mapWidth, mapHeight, cellSizes);
+    index.buildAdaptiveMultiResolution(
+        graph,
+        mapWidth,
+        mapHeight,
+        adaptiveClusterTargets(graph.getNodeCount())
+    );
 
-    // 为每个层级创建可视化项
     for (const auto& level : index.getLevels()) {
         std::vector<ClusterItem*> items;
         for (const auto& cluster : level.clusters) {
             ClusterItem* item = new ClusterItem(cluster.position, cluster.memberCount);
-            item->setVisible(false);
+            item->beginVisualTransition(0.0);
+            item->applyVisualProgress(1.0);
             addItem(item);
             items.push_back(item);
         }
@@ -136,14 +163,61 @@ void MapScene::buildClusters(const Graph& graph, double mapWidth, double mapHeig
 }
 
 void MapScene::setActiveClusterLevel(int level) {
-    if (level == activeClusterLevel_) return;
     activeClusterLevel_ = level;
+    for (int i = 0; i < static_cast<int>(clusterLevels_.size()); ++i) {
+        const qreal opacity = (i == level) ? 1.0 : 0.0;
+        for (ClusterItem* item : clusterLevels_[i]) {
+            item->beginVisualTransition(opacity);
+            item->applyVisualProgress(1.0);
+        }
+    }
+}
+
+void MapScene::transitionToDisplayBand(const ZoomBand& band, double zoom) {
+    currentViewZoom_ = zoom;
+    showLabels_ = band.showLabels;
+    activeClusterLevel_ = band.clusterLevel;
+    refreshPathStyle();
+
+    std::unordered_set<Edge::Id> trafficEdgeSet(
+        trafficHighlightedEdges_.begin(),
+        trafficHighlightedEdges_.end()
+    );
+
+    for (const auto& pair : edgeItems_) {
+        const Edge::Id edgeId = pair.first;
+        EdgeItem* item = pair.second;
+        if (!item || !graph_) continue;
+
+        const Edge* edge = graph_->getEdge(edgeId);
+        if (!edge) continue;
+
+        const bool forceVisible =
+            highlightedEdges_.count(edgeId) > 0 ||
+            trafficEdgeSet.count(edgeId) > 0;
+
+        item->beginVisualTransition(
+            edgeOpacityForBand(*edge, band, forceVisible),
+            edgeWidthScaleForBand(*edge, band, forceVisible)
+        );
+    }
+
+    for (const auto& pair : nodeItems_) {
+        NodeItem* item = pair.second;
+        if (!item) continue;
+        item->beginVisualTransition(item->isInteractive() ? 1.0 : band.nodeOpacity);
+    }
 
     for (int i = 0; i < static_cast<int>(clusterLevels_.size()); ++i) {
-        bool visible = (i == level);
+        const qreal targetOpacity = (i == band.clusterLevel) ? band.clusterOpacity : 0.0;
         for (ClusterItem* item : clusterLevels_[i]) {
-            item->setVisible(visible);
+            item->beginVisualTransition(targetOpacity);
         }
+    }
+
+    displayTransitionClock_.restart();
+    if (!displayTransitionTimer_.isActive()) {
+        displayTransitionTimer_.start();
     }
 }
 
@@ -171,21 +245,19 @@ void MapScene::updateEdgeCongestion(Edge::Id id, int congestionStatus) {
 void MapScene::clearPathSelection() {
     clearPath();
 
-    // 重置节点颜色和高亮状态
     if (startNode_ != Node::INVALID_ID) {
-        NodeItem* item = getNodeItem(startNode_);
-        if (item) {
-            item->setBrush(QBrush(QColor(60, 60, 60)));  // 原始深灰色
+        if (NodeItem* item = getNodeItem(startNode_)) {
+            item->setBrush(QBrush(QColor(66, 72, 78)));
             item->setPen(Qt::NoPen);
-            item->setHighlighted(false);  // 重置为小尺寸
+            item->setHighlighted(false);
         }
     }
+
     if (endNode_ != Node::INVALID_ID) {
-        NodeItem* item = getNodeItem(endNode_);
-        if (item) {
-            item->setBrush(QBrush(QColor(60, 60, 60)));  // 原始深灰色
+        if (NodeItem* item = getNodeItem(endNode_)) {
+            item->setBrush(QBrush(QColor(66, 72, 78)));
             item->setPen(Qt::NoPen);
-            item->setHighlighted(false);  // 重置为小尺寸
+            item->setHighlighted(false);
         }
     }
 
@@ -200,10 +272,8 @@ void MapScene::mousePressEvent(QGraphicsSceneMouseEvent* event) {
         return;
     }
 
-    // 查找点击的节点
-    QList<QGraphicsItem*> clickedItems = items(event->scenePos());
+    const QList<QGraphicsItem*> clickedItems = items(event->scenePos());
     NodeItem* clickedNode = nullptr;
-
     for (QGraphicsItem* item : clickedItems) {
         clickedNode = dynamic_cast<NodeItem*>(item);
         if (clickedNode) break;
@@ -214,49 +284,45 @@ void MapScene::mousePressEvent(QGraphicsSceneMouseEvent* event) {
         return;
     }
 
-    Node::Id clickedId = clickedNode->getNodeId();
+    const Node::Id clickedId = clickedNode->getNodeId();
 
     switch (clickState_) {
-        case 0:  // 第一次点击：设置起点
+        case 0:
             clearPathSelection();
             startNode_ = clickedId;
-            highlightNode(startNode_, QColor(33, 150, 243));  // 蓝色
+            highlightNode(startNode_, QColor(33, 150, 243));
             clickState_ = 1;
-            emit statusMessage(QString("起点: 节点 %1。请点击另一个节点作为终点。").arg(startNode_));
+            emit statusMessage(QString("Start node selected: %1").arg(startNode_));
             break;
-
-        case 1:  // 第二次点击：设置终点并查找路径
+        case 1:
             if (clickedId == startNode_) {
-                // 点击了相同节点，忽略
                 break;
             }
             endNode_ = clickedId;
-            highlightNode(endNode_, QColor(156, 39, 176));  // 紫色
+            highlightNode(endNode_, QColor(156, 39, 176));
 
-            // 查找路径
             if (graph_ && pathfinder_) {
                 PathResult result = pathfinder_->findPath(*graph_, startNode_, endNode_);
                 if (result.found) {
                     showPath(result);
                     emit pathFound(result);
-                    emit statusMessage(QString("路径已找到: %1 个节点, 开销: %2")
-                                           .arg(result.pathNodes.size())
-                                           .arg(result.totalCost, 0, 'f', 2));
+                    emit statusMessage(QString("Path found with %1 nodes, cost %2")
+                        .arg(result.pathNodes.size())
+                        .arg(result.totalCost, 0, 'f', 2));
                 } else {
-                    emit errorOccurred("路径查找", "未找到路径！");
+                    emit errorOccurred("Path", "No route found between the selected nodes.");
                 }
             } else {
-                emit errorOccurred("路径查找", "路径查找器未配置！请先生成或加载地图。");
+                emit errorOccurred("Path", "Graph or path finder is not ready.");
             }
             clickState_ = 2;
             break;
-
-        case 2:  // 第三次点击：清除并重新开始
+        case 2:
             clearPathSelection();
             startNode_ = clickedId;
-            highlightNode(startNode_, QColor(33, 150, 243));  // 蓝色
+            highlightNode(startNode_, QColor(33, 150, 243));
             clickState_ = 1;
-            emit statusMessage(QString("起点: 节点 %1。请点击另一个节点作为终点。").arg(startNode_));
+            emit statusMessage(QString("Start node selected: %1").arg(startNode_));
             break;
     }
 
@@ -265,12 +331,12 @@ void MapScene::mousePressEvent(QGraphicsSceneMouseEvent* event) {
 
 void MapScene::highlightNode(Node::Id id, const QColor& color) {
     NodeItem* item = getNodeItem(id);
-    if (item) {
-        item->setBrush(QBrush(color));
-        item->setPen(QPen(color.darker(130), 2));  // 添加边框
-        item->setHighlighted(true);  // 使其在视觉上更大（16px 直径）
-        item->setZValue(12.0);  // 置于前面
-    }
+    if (!item) return;
+
+    item->setBrush(QBrush(color));
+    item->setPen(QPen(color.darker(130), 2));
+    item->setHighlighted(true);
+    item->setZValue(12.0);
 }
 
 void MapScene::showPath(const PathResult& result) {
@@ -278,104 +344,81 @@ void MapScene::showPath(const PathResult& result) {
 
     if (!graph_ || result.pathNodes.size() < 2) return;
 
-    // 创建路径
     QPainterPath path;
-
-    const Node* firstNode = graph_->getNode(result.pathNodes[0]);
-    if (firstNode) {
+    if (const Node* firstNode = graph_->getNode(result.pathNodes.front())) {
         path.moveTo(firstNode->getPosition().x, firstNode->getPosition().y);
     }
 
     for (size_t i = 1; i < result.pathNodes.size(); ++i) {
         const Node* node = graph_->getNode(result.pathNodes[i]);
-        if (node) {
-            path.lineTo(node->getPosition().x, node->getPosition().y);
-        }
+        if (!node) continue;
+        path.lineTo(node->getPosition().x, node->getPosition().y);
     }
 
-    // 创建路径项
     pathItem_ = new QGraphicsPathItem(path);
-    QPen pen(QColor(33, 150, 243, 220));  // 半透明蓝色
-    pen.setWidthF(6.0);  // 更粗的路径以提高可见性
-    pen.setCapStyle(Qt::RoundCap);
-    pen.setJoinStyle(Qt::RoundJoin);
-    pathItem_->setPen(pen);
-    pathItem_->setZValue(5.0);  // 在边之上，在高亮节点之下
-
+    pathItem_->setZValue(5.0);
     addItem(pathItem_);
+    refreshPathStyle();
 }
 
 void MapScene::clearPath() {
-    if (pathItem_) {
-        removeItem(pathItem_);
-        delete pathItem_;
-        pathItem_ = nullptr;
-    }
+    if (!pathItem_) return;
+
+    removeItem(pathItem_);
+    delete pathItem_;
+    pathItem_ = nullptr;
 }
 
 void MapScene::highlightNodes(const std::vector<Node::Id>& nodeIds, const QColor& color) {
-    // Clear previous highlights first
     clearSpatialHighlights();
-
     highlightedNodes_ = nodeIds;
 
     for (Node::Id id : nodeIds) {
         NodeItem* item = getNodeItem(id);
-        if (item) {
-            item->setBrush(QBrush(color));
-            item->setPen(QPen(color.darker(120), 2));  // 添加边框以提高可见性
-            item->setHighlighted(true);  // 使其在视觉上更大（16px 直径）
-            item->setZValue(8.0);  // 在普通节点之上
-        }
+        if (!item) continue;
+        item->setBrush(QBrush(color));
+        item->setPen(QPen(color.darker(120), 2));
+        item->setHighlighted(true);
+        item->setZValue(8.0);
     }
 }
 
 void MapScene::highlightEdges(const std::vector<Edge::Id>& edgeIds, const QColor& color) {
     highlightedEdges_.insert(edgeIds.begin(), edgeIds.end());
 
-    QPen pen(color);
-    pen.setWidthF(3.0);
-    pen.setCapStyle(Qt::RoundCap);
-
     for (Edge::Id id : edgeIds) {
         EdgeItem* item = getEdgeItem(id);
-        if (item) {
-            item->setPen(pen);
-            item->setZValue(2.0);  // 在普通边之上
-        }
+        if (!item) continue;
+        item->setSpatialHighlight(true, color);
     }
 }
 
 void MapScene::clearSpatialHighlights() {
-    // 将之前高亮的节点重置为默认状态
     for (Node::Id id : highlightedNodes_) {
         NodeItem* item = getNodeItem(id);
-        if (item) {
-            item->setBrush(QBrush(QColor(60, 60, 60)));  // 原始深灰色
-            item->setPen(Qt::NoPen);  // 移除边框
-            item->setHighlighted(false);  // 重置为小尺寸
-            item->setZValue(10.0);  // 原始 Z 值
-        }
+        if (!item) continue;
+        item->setBrush(QBrush(QColor(66, 72, 78)));
+        item->setPen(Qt::NoPen);
+        item->setHighlighted(false);
+        item->setZValue(10.0);
     }
     highlightedNodes_.clear();
 
-    // 将之前高亮的边恢复到正确状态
     for (Edge::Id id : highlightedEdges_) {
         EdgeItem* item = getEdgeItem(id);
-        if (item) {
-            int status = 0;  // 热力图关闭时默认为绿色
-            if (heatmapVisible_ && graph_) {
-                const Edge* edge = graph_->getEdge(id);
-                if (edge) {
-                    status = edgeDisplayStatus(*edge, heatmapVisible_);
-                }
+        if (!item) continue;
+        item->setSpatialHighlight(false);
+
+        int status = 0;
+        if (heatmapVisible_ && graph_) {
+            if (const Edge* edge = graph_->getEdge(id)) {
+                status = edgeDisplayStatus(*edge, heatmapVisible_);
             }
-            item->updateStyle(status);
         }
+        item->updateStyle(status);
     }
     highlightedEdges_.clear();
 
-    // 移除查询点标记
     if (queryPointMarker_) {
         removeItem(queryPointMarker_);
         delete queryPointMarker_;
@@ -388,36 +431,30 @@ PathResult MapScene::findPathById(Node::Id startId, Node::Id endId) {
 
     if (!graph_ || !pathfinder_) {
         result.found = false;
-        emit errorOccurred("路径查找", "路径查找器未配置！请先生成或加载地图。");
+        emit errorOccurred("Path", "Graph or path finder is not ready.");
         return result;
     }
 
-    // 清除之前的路径选择
     clearPathSelection();
-
-    // 设置起点和终点节点
     startNode_ = startId;
     endNode_ = endId;
 
-    // 高亮显示起点和终点节点
-    highlightNode(startNode_, QColor(33, 150, 243));  // 蓝色
-    highlightNode(endNode_, QColor(156, 39, 176));    // 紫色
+    highlightNode(startNode_, QColor(33, 150, 243));
+    highlightNode(endNode_, QColor(156, 39, 176));
 
-    // 查找路径
     result = pathfinder_->findPath(*graph_, startNode_, endNode_);
-
     if (result.found) {
         showPath(result);
         emit pathFound(result);
-        emit statusMessage(QString("路径已找到: %1 个节点, 开销: %2")
-                               .arg(result.pathNodes.size())
-                               .arg(result.totalCost, 0, 'f', 2));
+        emit statusMessage(QString("Path found with %1 nodes, cost %2")
+            .arg(result.pathNodes.size())
+            .arg(result.totalCost, 0, 'f', 2));
     } else {
-        emit errorOccurred("路径查找", QString("未找到从节点 %1 到节点 %2 的路径！")
-                               .arg(startId).arg(endId));
+        emit errorOccurred("Path", QString("No route found between node %1 and node %2.")
+            .arg(startId).arg(endId));
     }
 
-    clickState_ = 2;  // 路径已显示状态
+    clickState_ = 2;
     return result;
 }
 
@@ -430,14 +467,16 @@ void MapScene::showTrafficPoint(double x, double y) {
 }
 
 void MapScene::placeMarker(QGraphicsEllipseItem*& marker, double x, double y,
-                            const QColor& fill, const QColor& border) {
+                           const QColor& fill, const QColor& border) {
     if (marker) {
         removeItem(marker);
         delete marker;
     }
+
     marker = new QGraphicsEllipseItem(x - 8, y - 8, 16, 16);
     marker->setBrush(QBrush(fill));
     marker->setPen(QPen(border, 2));
+    marker->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
     marker->setZValue(15.0);
     addItem(marker);
 }
@@ -449,28 +488,26 @@ void MapScene::showTrafficEdges(const std::vector<Edge::Id>& edgeIds, const Grap
     for (Edge::Id id : edgeIds) {
         EdgeItem* item = getEdgeItem(id);
         const Edge* edge = graph.getEdge(id);
-        if (item && edge) {
-            int status = edgeDisplayStatus(*edge, heatmapVisible_);
-            item->updateStyle(status);
-            item->setZValue(2.0);  // Above normal edges
-        }
+        if (!item || !edge) continue;
+
+        item->setTrafficFocus(true);
+        item->updateStyle(edgeDisplayStatus(*edge, heatmapVisible_));
     }
 }
 
 void MapScene::clearTrafficHighlights() {
-    // 根据热力图可见性将边恢复到正确状态
     for (Edge::Id id : trafficHighlightedEdges_) {
         EdgeItem* item = getEdgeItem(id);
-        if (item) {
-            int status = 0;  // 热力图关闭时默认为绿色
-            if (heatmapVisible_ && graph_) {
-                const Edge* edge = graph_->getEdge(id);
-                if (edge) {
-                    status = edgeDisplayStatus(*edge, heatmapVisible_);
-                }
+        if (!item) continue;
+
+        item->setTrafficFocus(false);
+        int status = 0;
+        if (heatmapVisible_ && graph_) {
+            if (const Edge* edge = graph_->getEdge(id)) {
+                status = edgeDisplayStatus(*edge, heatmapVisible_);
             }
-            item->updateStyle(status);
         }
+        item->updateStyle(status);
     }
     trafficHighlightedEdges_.clear();
 
@@ -485,11 +522,82 @@ void MapScene::updateTrafficHighlights(const Graph& graph) {
     for (Edge::Id id : trafficHighlightedEdges_) {
         EdgeItem* item = getEdgeItem(id);
         const Edge* edge = graph.getEdge(id);
-        if (item && edge) {
-            int status = edgeDisplayStatus(*edge, heatmapVisible_);
-            item->updateStyle(status);
+        if (!item || !edge) continue;
+
+        item->updateStyle(edgeDisplayStatus(*edge, heatmapVisible_));
+    }
+}
+
+void MapScene::advanceDisplayTransition() {
+    if (!displayTransitionClock_.isValid()) {
+        displayTransitionTimer_.stop();
+        return;
+    }
+
+    const qreal progress = std::clamp(
+        static_cast<qreal>(displayTransitionClock_.elapsed()) /
+        static_cast<qreal>(displayTransitionDurationMs_),
+        0.0,
+        1.0
+    );
+    const qreal eased = QEasingCurve(QEasingCurve::OutCubic).valueForProgress(progress);
+
+    for (const auto& pair : edgeItems_) {
+        if (pair.second) {
+            pair.second->applyVisualProgress(eased);
         }
     }
+    for (const auto& pair : nodeItems_) {
+        if (pair.second) {
+            pair.second->applyVisualProgress(eased);
+        }
+    }
+    for (auto& level : clusterLevels_) {
+        for (ClusterItem* item : level) {
+            if (item) {
+                item->applyVisualProgress(eased);
+            }
+        }
+    }
+
+    if (progress >= 1.0) {
+        displayTransitionTimer_.stop();
+    }
+}
+
+void MapScene::refreshPathStyle() {
+    if (!pathItem_) return;
+
+    const double normalized = std::clamp(
+        (std::log2(std::max(currentViewZoom_, 0.05)) + 3.0) / 5.0,
+        0.0,
+        1.0
+    );
+
+    QPen pen(QColor(33, 150, 243, 225));
+    pen.setWidthF(4.4 + normalized * 1.8);
+    pen.setCapStyle(Qt::RoundCap);
+    pen.setJoinStyle(Qt::RoundJoin);
+    pathItem_->setPen(pen);
+}
+
+qreal MapScene::edgeOpacityForBand(const Edge& edge, const ZoomBand& band, bool forceVisible) const {
+    if (forceVisible) return 1.0;
+    if (band.minEdgeImportance <= 0.0) return static_cast<qreal>(band.edgeOpacity);
+
+    const qreal softness = 0.08;
+    const qreal importance = static_cast<qreal>(edge.getImportanceScore());
+    const qreal minImportance = static_cast<qreal>(band.minEdgeImportance);
+    return smoothstep(minImportance - softness, minImportance + softness, importance) *
+           static_cast<qreal>(band.edgeOpacity);
+}
+
+double MapScene::edgeWidthScaleForBand(const Edge& edge, const ZoomBand& band, bool forceVisible) const {
+    double scale = band.widthScale * (0.92 + edge.getImportanceScore() * 0.18);
+    if (forceVisible) {
+        scale += 0.08;
+    }
+    return scale;
 }
 
 } // namespace nav

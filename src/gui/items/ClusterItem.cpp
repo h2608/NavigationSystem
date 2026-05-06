@@ -1,9 +1,19 @@
 #include "gui/items/ClusterItem.h"
-#include <QPainter>
+
 #include <QFont>
+#include <QPainter>
+#include <algorithm>
 #include <cmath>
 
 namespace nav {
+
+namespace {
+
+qreal lerp(qreal start, qreal end, qreal progress) {
+    return start + (end - start) * progress;
+}
+
+} // namespace
 
 ClusterItem::ClusterItem(const Point2D& position, size_t memberCount,
                          QGraphicsItem* parent)
@@ -12,16 +22,20 @@ ClusterItem::ClusterItem(const Point2D& position, size_t memberCount,
     , visualRadius_(std::max(6.0, std::min(12.0, 4.0 + std::log2(static_cast<double>(memberCount)))))
 {
     setPos(position.x, position.y);
-
-    // 关键：忽略视图变换，始终以设备像素坐标绘制
     setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
-
-    // 半透明蓝灰色
-    setBrush(QBrush(QColor(100, 130, 180, 160)));
-    setPen(QPen(QColor(70, 90, 130), 1.0));
-
-    // Z 值：在边之上，接近节点层
+    setBrush(QBrush(QColor(82, 120, 168, 185)));
+    setPen(QPen(QColor(55, 84, 124), 1.2));
     setZValue(11.0);
+}
+
+void ClusterItem::beginVisualTransition(qreal targetOpacity) {
+    startOpacity_ = currentOpacity_;
+    targetOpacity_ = targetOpacity;
+}
+
+void ClusterItem::applyVisualProgress(qreal progress) {
+    currentOpacity_ = lerp(startOpacity_, targetOpacity_, progress);
+    refreshVisualState();
 }
 
 QRectF ClusterItem::boundingRect() const {
@@ -42,13 +56,12 @@ void ClusterItem::paint(QPainter* painter,
     Q_UNUSED(option);
     Q_UNUSED(widget);
 
-    // 固定视觉大小绘制（不随缩放变化）
+    painter->setRenderHint(QPainter::Antialiasing, true);
     painter->setBrush(brush());
     painter->setPen(pen());
     painter->drawEllipse(QRectF(-visualRadius_, -visualRadius_,
                                  visualRadius_ * 2.0, visualRadius_ * 2.0));
 
-    // 若成员数 > 5 则显示数字标签
     if (memberCount_ > 5) {
         painter->setPen(Qt::white);
         QFont font;
@@ -56,13 +69,19 @@ void ClusterItem::paint(QPainter* painter,
         font.setBold(true);
         painter->setFont(font);
 
-        QString text = (memberCount_ > 999)
+        const QString text = (memberCount_ > 999)
             ? QString::number(memberCount_ / 1000) + "k"
             : QString::number(memberCount_);
-        QRectF textRect(-visualRadius_, -visualRadius_,
-                        visualRadius_ * 2.0, visualRadius_ * 2.0);
+        const QRectF textRect(-visualRadius_, -visualRadius_,
+                              visualRadius_ * 2.0, visualRadius_ * 2.0);
         painter->drawText(textRect, Qt::AlignCenter, text);
     }
+}
+
+void ClusterItem::refreshVisualState() {
+    setOpacity(currentOpacity_);
+    setVisible(currentOpacity_ > 0.02);
+    update();
 }
 
 } // namespace nav
