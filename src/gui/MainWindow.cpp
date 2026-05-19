@@ -202,7 +202,7 @@ void MainWindow::generateNewMap(int numNodes, double width, double height) {
 }
 
 void MainWindow::startSimulation() {
-    simulator_ = std::make_unique<TrafficSimulator>(*graph_, dijkstraPathfinder_.get());
+    simulator_ = std::make_unique<TrafficSimulator>(*graph_, dynamicPathfinder_.get());
 
     // 根据图大小缩放交通负载
     static constexpr int kEdgesPerSpawn = 500;
